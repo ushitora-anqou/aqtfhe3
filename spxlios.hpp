@@ -23,7 +23,7 @@ struct alignas(32) FFT_PRECOMP {
 };
 
 struct fft_code : Xbyak::CodeGenerator {
-    fft_code()
+    fft_code(size_t N) : Xbyak::CodeGenerator(4096, Xbyak::AutoGrow)
     {
         /*
            index  0    1    2    3    4      5
@@ -31,16 +31,19 @@ struct fft_code : Xbyak::CodeGenerator {
            var    dst  sit  send bla, table, inout
         */
         using namespace Xbyak;
+        const size_t n = 2 * N, ns4 = n / 4;
 
         vbroadcastsd(ymm2, ptr[rcx]);
-        L("@@");
-        vmovupd(ymm0, ptr[rsi]);
-        vmulpd(ymm0, ymm2, ymm0);
-        vmovapd(ptr[rdi], ymm0);
-        add(rsi, 32);
-        add(rdi, 32);
-        cmp(rsi, rdx);
-        jb("@b");
+        // L("@@");
+        for (size_t i = 0; i < N; i += 4) {
+            vmovupd(ymm0, ptr[rsi]);
+            vmulpd(ymm0, ymm2, ymm0);
+            vmovapd(ptr[rdi], ymm0);
+            add(rsi, 32);
+            add(rdi, 32);
+            // cmp(rsi, rdx);
+            // jb("@b");
+        }
 
         mov(rdi, r8);
         mov(rsi, r9);
@@ -68,118 +71,131 @@ struct fft_code : Xbyak::CodeGenerator {
         vmovapd(ymm13, ptr[rip + size4negation2]);
         vmovapd(ymm12, ptr[rip + size4negation3]);
 
-        mov(rax, 0x0);
+        // mov(rax, 0x0);
         mov(r10, rdi);
         mov(r11, rsi);
-        L("fftsize2loop");
-        vmovapd(ymm0, ptr[r10]);
-        vmovapd(ymm1, ptr[r11]);
-        vshufpd(ymm2, ymm0, ymm0, 0x0);
-        vshufpd(ymm3, ymm0, ymm0, 0xf);
-        vshufpd(ymm4, ymm1, ymm1, 0x0);
-        vshufpd(ymm5, ymm1, ymm1, 0xf);
-        vfmadd231pd(ymm2, ymm12, ymm3);
-        vfmadd231pd(ymm4, ymm12, ymm5);
-        vmovapd(ptr[r10], ymm2);
-        vmovapd(ptr[r11], ymm4);
-        lea(r10, ptr[r10 + 0x20]);
-        lea(r11, ptr[r11 + 0x20]);
-        add(rax, 0x4);
-        cmp(rax, r9);
-        jb("fftsize2loop");
+        // L("fftsize2loop");
+        for (size_t block = 0; block < ns4; block += 4) {
+            vmovapd(ymm0, ptr[r10]);
+            vmovapd(ymm1, ptr[r11]);
+            vshufpd(ymm2, ymm0, ymm0, 0x0);
+            vshufpd(ymm3, ymm0, ymm0, 0xf);
+            vshufpd(ymm4, ymm1, ymm1, 0x0);
+            vshufpd(ymm5, ymm1, ymm1, 0xf);
+            vfmadd231pd(ymm2, ymm12, ymm3);
+            vfmadd231pd(ymm4, ymm12, ymm5);
+            vmovapd(ptr[r10], ymm2);
+            vmovapd(ptr[r11], ymm4);
+            lea(r10, ptr[r10 + 0x20]);
+            lea(r11, ptr[r11 + 0x20]);
+            // add(rax, 0x4);
+            // cmp(rax, r9);
+            // jb("fftsize2loop");
+        }
 
-        mov(rax, 0x0);
+        // mov(rax, 0x0);
         mov(r10, rdi);
         mov(r11, rsi);
-        L("fftsize4loop");
-        vmovapd(ymm0, ptr[r10]);
-        vmovapd(ymm1, ptr[r11]);
-        vperm2f128(ymm4, ymm0, ymm0, 0x20);
-        vperm2f128(ymm5, ymm1, ymm1, 0x20);
-        vperm2f128(ymm6, ymm0, ymm0, 0x31);
-        vperm2f128(ymm7, ymm1, ymm1, 0x31);
-        vshufpd(ymm8, ymm6, ymm7, 0xa);
-        vshufpd(ymm9, ymm7, ymm6, 0xa);
-        vfmadd231pd(ymm4, ymm13, ymm8);
-        vfmadd231pd(ymm5, ymm14, ymm9);
-        vmovapd(ptr[r10], ymm4);
-        vmovapd(ptr[r11], ymm5);
-        lea(r10, ptr[r10 + 0x20]);
-        lea(r11, ptr[r11 + 0x20]);
-        add(rax, 0x4);
-        cmp(rax, r9);
-        jb("fftsize4loop");
+        // L("fftsize4loop");
+        for (size_t block = 0; block < ns4; block += 4) {
+            vmovapd(ymm0, ptr[r10]);
+            vmovapd(ymm1, ptr[r11]);
+            vperm2f128(ymm4, ymm0, ymm0, 0x20);
+            vperm2f128(ymm5, ymm1, ymm1, 0x20);
+            vperm2f128(ymm6, ymm0, ymm0, 0x31);
+            vperm2f128(ymm7, ymm1, ymm1, 0x31);
+            vshufpd(ymm8, ymm6, ymm7, 0xa);
+            vshufpd(ymm9, ymm7, ymm6, 0xa);
+            vfmadd231pd(ymm4, ymm13, ymm8);
+            vfmadd231pd(ymm5, ymm14, ymm9);
+            vmovapd(ptr[r10], ymm4);
+            vmovapd(ptr[r11], ymm5);
+            lea(r10, ptr[r10 + 0x20]);
+            lea(r11, ptr[r11 + 0x20]);
+            // add(rax, 0x4);
+            // cmp(rax, r9);
+            // jb("fftsize4loop");
+        }
 
         mov(rdx, r8);
         mov(rax, 0x4);
-        L("ffthalfnnloop");
-        mov(rbx, 0x0);
-        L("fftblockloop");
-        lea(r10, ptr[rdi + rbx * 8]);
-        lea(r11, ptr[rsi + rbx * 8]);
-        lea(r12, ptr[r10 + rax * 8]);
-        lea(r13, ptr[r11 + rax * 8]);
-        mov(r14, rdx);
-        mov(rcx, 0x0);
-        L("fftoffloop");
-        vmovapd(ymm0, ptr[r10]);
-        vmovapd(ymm1, ptr[r11]);
-        vmovapd(ymm2, ptr[r12]);
-        vmovapd(ymm3, ptr[r13 + 0x0]);
-        vmovapd(ymm4, ptr[r14]);
-        vmovapd(ymm5, ptr[r14 + 0x20]);
-        vmulpd(ymm6, ymm4, ymm2);
-        vmulpd(ymm7, ymm5, ymm2);
-        vfnmadd231pd(ymm6, ymm5, ymm3);
-        vfmadd231pd(ymm7, ymm4, ymm3);
-        vsubpd(ymm2, ymm0, ymm6);
-        vsubpd(ymm3, ymm1, ymm7);
-        vaddpd(ymm0, ymm0, ymm6);
-        vaddpd(ymm1, ymm1, ymm7);
-        vmovapd(ptr[r10], ymm0);
-        vmovapd(ptr[r11], ymm1);
-        vmovapd(ptr[r12], ymm2);
-        vmovapd(ptr[r13 + 0x0], ymm3);
-        lea(r10, ptr[r10 + 0x20]);
-        lea(r11, ptr[r11 + 0x20]);
-        lea(r12, ptr[r12 + 0x20]);
-        lea(r13, ptr[r13 + 0x20]);
-        lea(r14, ptr[r14 + 0x40]);
-        add(rcx, 0x4);
-        cmp(rcx, rax);
-        jb("fftoffloop");
-        lea(rbx, ptr[rbx + rax * 2]);
-        cmp(rbx, r9);
-        jb("fftblockloop");
-        shl(rax, 1);
-        lea(rdx, ptr[rdx + rax * 8]);
-        cmp(rax, r9);
-        jb("ffthalfnnloop");
+        // L("ffthalfnnloop");
+        for (size_t halfnn = 4; halfnn < ns4; halfnn *= 2) {
+            size_t nn = 2 * halfnn;
+            mov(rbx, 0x0);
+            // L("fftblockloop");
+            for (size_t block = 0; block < ns4; block += nn) {
+                lea(r10, ptr[rdi + rbx * 8]);
+                lea(r11, ptr[rsi + rbx * 8]);
+                lea(r12, ptr[r10 + rax * 8]);
+                lea(r13, ptr[r11 + rax * 8]);
+                mov(r14, rdx);
+                mov(rcx, 0x0);
+                // L("fftoffloop");
+                for (size_t off = 0; off < halfnn; off += 4) {
+                    vmovapd(ymm0, ptr[r10]);
+                    vmovapd(ymm1, ptr[r11]);
+                    vmovapd(ymm2, ptr[r12]);
+                    vmovapd(ymm3, ptr[r13 + 0x0]);
+                    vmovapd(ymm4, ptr[r14]);
+                    vmovapd(ymm5, ptr[r14 + 0x20]);
+                    vmulpd(ymm6, ymm4, ymm2);
+                    vmulpd(ymm7, ymm5, ymm2);
+                    vfnmadd231pd(ymm6, ymm5, ymm3);
+                    vfmadd231pd(ymm7, ymm4, ymm3);
+                    vsubpd(ymm2, ymm0, ymm6);
+                    vsubpd(ymm3, ymm1, ymm7);
+                    vaddpd(ymm0, ymm0, ymm6);
+                    vaddpd(ymm1, ymm1, ymm7);
+                    vmovapd(ptr[r10], ymm0);
+                    vmovapd(ptr[r11], ymm1);
+                    vmovapd(ptr[r12], ymm2);
+                    vmovapd(ptr[r13 + 0x0], ymm3);
+                    lea(r10, ptr[r10 + 0x20]);
+                    lea(r11, ptr[r11 + 0x20]);
+                    lea(r12, ptr[r12 + 0x20]);
+                    lea(r13, ptr[r13 + 0x20]);
+                    lea(r14, ptr[r14 + 0x40]);
+                    add(rcx, 0x4);
+                    // cmp(rcx, rax);
+                    // jb("fftoffloop");
+                }
+                lea(rbx, ptr[rbx + rax * 2]);
+                // cmp(rbx, r9);
+                // jb("fftblockloop");
+            }
+            shl(rax, 1);
+            lea(rdx, ptr[rdx + rax * 8]);
+            // cmp(rax, r9);
+            // jb("ffthalfnnloop");
+        }
 
-        mov(rax, 0x0);
+        // mov(rax, 0x0);
         mov(r10, rdi);
         mov(r11, rsi);
-        L("fftfinalloop");
-        vmovapd(ymm0, ptr[r10]);
-        vmovapd(ymm1, ptr[r11]);
-        vmovapd(ymm2, ptr[rdx]);
-        vmovapd(ymm3, ptr[rdx + 0x20]);
-        vmulpd(ymm4, ymm2, ymm0);
-        vmulpd(ymm5, ymm3, ymm0);
-        vmulpd(ymm6, ymm2, ymm1);
-        vmulpd(ymm7, ymm3, ymm1);
-        vsubpd(ymm0, ymm4, ymm7);
-        vaddpd(ymm1, ymm5, ymm6);
-        vmovapd(ptr[r10], ymm0);
-        vmovapd(ptr[r11], ymm1);
-        lea(r10, ptr[r10 + 0x20]);
-        lea(r11, ptr[r11 + 0x20]);
-        lea(rdx, ptr[rdx + 0x40]);
-        add(rax, 0x4);
-        cmp(rax, r9);
-        jb("fftfinalloop");
+        // L("fftfinalloop");
+        for (size_t j = 0; j < ns4; j += 4) {
+            vmovapd(ymm0, ptr[r10]);
+            vmovapd(ymm1, ptr[r11]);
+            vmovapd(ymm2, ptr[rdx]);
+            vmovapd(ymm3, ptr[rdx + 0x20]);
+            vmulpd(ymm4, ymm2, ymm0);
+            vmulpd(ymm5, ymm3, ymm0);
+            vmulpd(ymm6, ymm2, ymm1);
+            vmulpd(ymm7, ymm3, ymm1);
+            vsubpd(ymm0, ymm4, ymm7);
+            vaddpd(ymm1, ymm5, ymm6);
+            vmovapd(ptr[r10], ymm0);
+            vmovapd(ptr[r11], ymm1);
+            lea(r10, ptr[r10 + 0x20]);
+            lea(r11, ptr[r11 + 0x20]);
+            lea(rdx, ptr[rdx + 0x40]);
+            // add(rax, 0x4);
+            // cmp(rax, r9);
+            // jb("fftfinalloop");
+        }
 
-        L("fftend");
+        // L("fftend");
         vzeroall();
         pop(rbx);
         pop(r14);
@@ -238,7 +254,7 @@ struct fft_code : Xbyak::CodeGenerator {
 };
 
 struct ifft_code : Xbyak::CodeGenerator {
-    ifft_code()
+    ifft_code(size_t N) : Xbyak::CodeGenerator(4096, Xbyak::AutoGrow)
     {
         /*
            index  0    1    2     3      4      5   | 6,   7,   8
@@ -246,15 +262,18 @@ struct ifft_code : Xbyak::CodeGenerator {
            var    dst  ait, aend, table, inout, _,  | dst, sit, send
         */
         using namespace Xbyak;
+        const size_t n = 2 * N, ns4 = n / 4;
 
-        L("@@");
-        vmovupd(xmm0, ptr[rsi]);
-        vcvtdq2pd(ymm1, xmm0);
-        vmovapd(ptr[rdi], ymm1);
-        add(rsi, 16);
-        add(rdi, 32);
-        cmp(rsi, rdx);
-        jb("@b");
+        // L("@@");
+        for (size_t i = 0; i < N; i += 4) {
+            vmovupd(xmm0, ptr[rsi]);
+            vcvtdq2pd(ymm1, xmm0);
+            vmovapd(ptr[rdi], ymm1);
+            add(rsi, 16);
+            add(rdi, 32);
+            // cmp(rsi, rdx);
+            // jb("@b");
+        }
 
         mov(rdi, rcx);
         mov(rsi, r8);
@@ -280,113 +299,123 @@ struct ifft_code : Xbyak::CodeGenerator {
         shr(r10, 0x3);
         mov(rcx, 0x0);
         mov(r11, r8);
-        L("firstloop");
-        vmovapd(ymm0, ptr[rdi + rcx * 8]);
-        vmovapd(ymm1, ptr[rsi + rcx * 8]);
-        vmovapd(ymm2, ptr[r11]);
-        vmovapd(ymm3, ptr[r11 + 0x20]);
-        vmulpd(ymm4, ymm2, ymm0);
-        vmulpd(ymm5, ymm3, ymm0);
-        vfnmadd231pd(ymm4, ymm3, ymm1);
-        vfmadd231pd(ymm5, ymm2, ymm1);
-        vmovapd(ptr[rdi + rcx * 8], ymm4);
-        vmovapd(ptr[rsi + rcx * 8], ymm5);
-        lea(r11, ptr[r11 + 0x40]);
-        add(rcx, 0x4);
-        cmp(rcx, r10);
-        jb("firstloop");
+        // L("firstloop");
+        for (size_t j = 0; j < ns4; j += 4) {
+            vmovapd(ymm0, ptr[rdi + rcx * 8]);
+            vmovapd(ymm1, ptr[rsi + rcx * 8]);
+            vmovapd(ymm2, ptr[r11]);
+            vmovapd(ymm3, ptr[r11 + 0x20]);
+            vmulpd(ymm4, ymm2, ymm0);
+            vmulpd(ymm5, ymm3, ymm0);
+            vfnmadd231pd(ymm4, ymm3, ymm1);
+            vfmadd231pd(ymm5, ymm2, ymm1);
+            vmovapd(ptr[rdi + rcx * 8], ymm4);
+            vmovapd(ptr[rsi + rcx * 8], ymm5);
+            lea(r11, ptr[r11 + 0x40]);
+            add(rcx, 0x4);
+            // cmp(rcx, r10);
+            // jb("firstloop");
+        }
 
         mov(r12, r10);
-        L("nnloop");
-        mov(r13, r12);
-        shr(r13, 1);
-        lea(r8, ptr[r8 + r12 * 8]);
-        lea(r8, ptr[r8 + r12 * 8]);
-        mov(r11, 0x0);
-        L("blockloop");
-        lea(rax, ptr[rdi + r11 * 8]);
-        lea(rbx, ptr[rsi + r11 * 8]);
-        lea(rcx, ptr[rax + r13 * 8]);
-        lea(rdx, ptr[rbx + r13 * 8]);
-        mov(r9, 0x0);
-        mov(r14, r8);
-        L("offloop");
-        vmovapd(ymm0, ptr[rax + r9 * 8]);
-        vmovapd(ymm1, ptr[rbx + r9 * 8]);
-        vmovapd(ymm2, ptr[rcx + r9 * 8]);
-        vmovapd(ymm3, ptr[rdx + r9 * 8]);
-        vaddpd(ymm4, ymm2, ymm0);
-        vaddpd(ymm5, ymm3, ymm1);
-        vsubpd(ymm6, ymm0, ymm2);
-        vsubpd(ymm7, ymm1, ymm3);
-        vmovapd(ptr[rax + r9 * 8], ymm4);
-        vmovapd(ptr[rbx + r9 * 8], ymm5);
-        vmovapd(ymm8, ptr[r14]);
-        vmovapd(ymm9, ptr[r14 + 0x20]);
-        vmulpd(ymm4, ymm8, ymm6);
-        vfnmadd231pd(ymm4, ymm9, ymm7);
-        vmulpd(ymm5, ymm9, ymm6);
-        vfmadd231pd(ymm5, ymm8, ymm7);
-        vmovapd(ptr[rcx + r9 * 8], ymm4);
-        vmovapd(ptr[rdx + r9 * 8], ymm5);
-        lea(r14, ptr[r14 + 0x40]);
-        add(r9, 0x4);
-        cmp(r9, r13);
-        jb("offloop");
-        add(r11, r12);
-        cmp(r11, r10);
-        jb("blockloop");
-        mov(r12, r13);
-        cmp(r12, 0x8);
-        jae("nnloop");
+        // L("nnloop");
+        for (size_t nn = ns4; nn >= 8; nn /= 2) {
+            size_t halfnn = nn / 2;
+            mov(r13, r12);
+            shr(r13, 1);
+            lea(r8, ptr[r8 + r12 * 8]);
+            lea(r8, ptr[r8 + r12 * 8]);
+            mov(r11, 0x0);
+            // L("blockloop");
+            for (size_t block = 0; block < ns4; block += nn) {
+                lea(rax, ptr[rdi + r11 * 8]);
+                lea(rbx, ptr[rsi + r11 * 8]);
+                lea(rcx, ptr[rax + r13 * 8]);
+                lea(rdx, ptr[rbx + r13 * 8]);
+                mov(r9, 0x0);
+                mov(r14, r8);
+                // L("offloop");
+                for (size_t off = 0; off < halfnn; off += 4) {
+                    vmovapd(ymm0, ptr[rax + r9 * 8]);
+                    vmovapd(ymm1, ptr[rbx + r9 * 8]);
+                    vmovapd(ymm2, ptr[rcx + r9 * 8]);
+                    vmovapd(ymm3, ptr[rdx + r9 * 8]);
+                    vaddpd(ymm4, ymm2, ymm0);
+                    vaddpd(ymm5, ymm3, ymm1);
+                    vsubpd(ymm6, ymm0, ymm2);
+                    vsubpd(ymm7, ymm1, ymm3);
+                    vmovapd(ptr[rax + r9 * 8], ymm4);
+                    vmovapd(ptr[rbx + r9 * 8], ymm5);
+                    vmovapd(ymm8, ptr[r14]);
+                    vmovapd(ymm9, ptr[r14 + 0x20]);
+                    vmulpd(ymm4, ymm8, ymm6);
+                    vfnmadd231pd(ymm4, ymm9, ymm7);
+                    vmulpd(ymm5, ymm9, ymm6);
+                    vfmadd231pd(ymm5, ymm8, ymm7);
+                    vmovapd(ptr[rcx + r9 * 8], ymm4);
+                    vmovapd(ptr[rdx + r9 * 8], ymm5);
+                    lea(r14, ptr[r14 + 0x40]);
+                    add(r9, 0x4);
+                    // cmp(r9, r13);
+                }
+                add(r11, r12);
+                // cmp(r11, r10);
+            }
+            mov(r12, r13);
+            // cmp(r12, 0x8);
+        }
 
         Label size4negation0, size4negation1, size4negation2, size4negation3;
         vmovapd(ymm15, ptr[rip + size4negation0]);
         vmovapd(ymm14, ptr[rip + size4negation1]);
         vmovapd(ymm13, ptr[rip + size4negation2]);
         vmovapd(ymm12, ptr[rip + size4negation3]);
-        mov(rax, 0x0);
+        // mov(rax, 0x0);
         mov(r11, rdi);
         mov(r12, rsi);
-        L("size4loop");
-        vmovapd(ymm0, ptr[r11]);
-        vmovapd(ymm1, ptr[r12]);
-        vshufpd(ymm2, ymm0, ymm1, 0xa);
-        vshufpd(ymm3, ymm1, ymm0, 0xa);
-        vperm2f128(ymm4, ymm0, ymm2, 0x20);
-        vperm2f128(ymm5, ymm0, ymm2, 0x31);
-        vperm2f128(ymm6, ymm1, ymm3, 0x20);
-        vperm2f128(ymm7, ymm1, ymm3, 0x31);
-        vmulpd(ymm4, ymm15, ymm4);
-        vfmadd231pd(ymm4, ymm14, ymm5);
-        vfmadd231pd(ymm6, ymm13, ymm7);
-        vmovapd(ptr[r11], ymm4);
-        vmovapd(ptr[r12], ymm6);
-        lea(r11, ptr[r11 + 0x20]);
-        lea(r12, ptr[r12 + 0x20]);
-        add(rax, 0x4);
-        cmp(rax, r10);
-        jb("size4loop");
+        // L("size4loop");
+        for (size_t block = 0; block < ns4; block += 4) {
+            vmovapd(ymm0, ptr[r11]);
+            vmovapd(ymm1, ptr[r12]);
+            vshufpd(ymm2, ymm0, ymm1, 0xa);
+            vshufpd(ymm3, ymm1, ymm0, 0xa);
+            vperm2f128(ymm4, ymm0, ymm2, 0x20);
+            vperm2f128(ymm5, ymm0, ymm2, 0x31);
+            vperm2f128(ymm6, ymm1, ymm3, 0x20);
+            vperm2f128(ymm7, ymm1, ymm3, 0x31);
+            vmulpd(ymm4, ymm15, ymm4);
+            vfmadd231pd(ymm4, ymm14, ymm5);
+            vfmadd231pd(ymm6, ymm13, ymm7);
+            vmovapd(ptr[r11], ymm4);
+            vmovapd(ptr[r12], ymm6);
+            lea(r11, ptr[r11 + 0x20]);
+            lea(r12, ptr[r12 + 0x20]);
+            // add(rax, 0x4);
+            // cmp(rax, r10);
+            // jb("size4loop");
+        }
 
-        mov(rax, 0x0);
+        // mov(rax, 0x0);
         mov(r11, rdi);
         mov(r12, rsi);
-        L("size2loop");
-        vmovapd(ymm0, ptr[r11]);
-        vmovapd(ymm1, ptr[r12]);
-        vshufpd(ymm2, ymm0, ymm0, 0x0);
-        vshufpd(ymm3, ymm0, ymm0, 0xf);
-        vshufpd(ymm4, ymm1, ymm1, 0x0);
-        vshufpd(ymm5, ymm1, ymm1, 0xf);
-        vfmadd231pd(ymm2, ymm12, ymm3);
-        vfmadd231pd(ymm4, ymm12, ymm5);
-        vmovapd(ptr[r11], ymm2);
-        vmovapd(ptr[r12], ymm4);
-        lea(r11, ptr[r11 + 0x20]);
-        lea(r12, ptr[r12 + 0x20]);
-        add(rax, 0x4);
-        cmp(rax, r10);
-        jb("size2loop");
+        // L("size2loop");
+        for (size_t block = 0; block < ns4; block += 4) {
+            vmovapd(ymm0, ptr[r11]);
+            vmovapd(ymm1, ptr[r12]);
+            vshufpd(ymm2, ymm0, ymm0, 0x0);
+            vshufpd(ymm3, ymm0, ymm0, 0xf);
+            vshufpd(ymm4, ymm1, ymm1, 0x0);
+            vshufpd(ymm5, ymm1, ymm1, 0xf);
+            vfmadd231pd(ymm2, ymm12, ymm3);
+            vfmadd231pd(ymm4, ymm12, ymm5);
+            vmovapd(ptr[r11], ymm2);
+            vmovapd(ptr[r12], ymm4);
+            lea(r11, ptr[r11 + 0x20]);
+            lea(r12, ptr[r12 + 0x20]);
+            // add(rax, 0x4);
+            // cmp(rax, r10);
+            // jb("size2loop");
+        }
 
         L("end");
         vzeroall();
@@ -400,13 +429,15 @@ struct ifft_code : Xbyak::CodeGenerator {
         mov(rdi, ptr[rsp + 8]);   // dst
         mov(rsi, ptr[rsp + 16]);  // sit
         mov(rdx, ptr[rsp + 24]);  // send
-        L("@@");
-        vmovapd(ymm0, ptr[rsi]);
-        vmovupd(ptr[rdi], ymm0);
-        add(rsi, 32);
-        add(rdi, 32);
-        cmp(rsi, rdx);
-        jb("@b");
+        // L("@@");
+        for (size_t i = 0; i < N; i += 4) {
+            vmovapd(ymm0, ptr[rsi]);
+            vmovupd(ptr[rdi], ymm0);
+            add(rsi, 32);
+            add(rdi, 32);
+            // cmp(rsi, rdx);
+            // jb("@b");
+        }
         vzeroall();
 
         ret();
@@ -570,15 +601,23 @@ private:
 public:
     processor()
         : direct_trig_tables_(detail::direct_trig_tables<N>()),
-          reverse_trig_tables_(detail::reverse_trig_tables<N>())
+          reverse_trig_tables_(detail::reverse_trig_tables<N>()),
+          tables_direct_(),
+          tables_reverse_(),
+          fft_code_(N),
+          ifft_code_(N),
+          fft_(nullptr),
+          ifft_(nullptr)
     {
         tables_direct_.n = 2 * N;
         tables_direct_.trig_tables = direct_trig_tables_.get();
         tables_reverse_.n = 2 * N;
         tables_reverse_.trig_tables = reverse_trig_tables_.get();
+        fft_code_.ready();
         fft_ = fft_code_.getCode<void (*)(
             double *, const double *, const double *, const double *,
             const detail::FFT_PRECOMP *, double *)>();
+        ifft_code_.ready();
         ifft_ =
             ifft_code_
                 .getCode<void (*)(double *, const int32_t *, const int32_t *,
