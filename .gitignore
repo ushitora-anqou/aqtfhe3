@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+
+# Written by anqou
+.clangd/
+compile_commands.json
+main
