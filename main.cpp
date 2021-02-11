@@ -279,6 +279,54 @@ struct trlwe_lvl1 {
 };
 
 template <class P>
+struct trgsw_lvl1 {
+    std::array<trlwe_lvl1<P>, 2 * P::l> data;
+
+    trlwe_lvl1<P> &operator[](size_t i)
+    {
+        return data[i];
+    }
+
+    const trlwe_lvl1<P> &operator[](size_t i) const
+    {
+        return data[i];
+    }
+
+    template <RandGen RG>
+    static trgsw_lvl1 encrypt_poly_int(RG &rng, const secret_key<P> &skey,
+                                       const poly<int, P::N> &mu)
+    {
+        // Assume Bg = (1 << Bgbit)
+        constexpr size_t N = P::N, l = P::l, Bgbit = P::Bgbit;
+
+        trgsw_lvl1 trgsw;
+        // trgsw[i] = (a[i][X], b[i][X])
+        for (auto &trlwe : trgsw.data)
+            trlwe = trlwe_lvl1<P>::encrypt_zero(rng, skey);
+        // trgsw[i].a += mu[X] / (Bg^i)  (0 <= i < l)
+        // trgsw[l + i].b += mu[X] / (Bg^i)  (0 <= i < l)
+        for (size_t i = 0; i < l; i++) {
+            for (size_t j = 0; j < N; j++) {
+                torus t =
+                    static_cast<torus>(mu[j]) * (1u << (32 - (i + 1) * Bgbit));
+                trgsw[i].a[j] += t;
+                trgsw[l + i].b[j] += t;
+            }
+        }
+
+        return trgsw;
+    }
+
+    template <RandGen RG>
+    static trgsw_lvl1 encrypt_bool(RG &rng, const secret_key<P> &skey, bool mu)
+    {
+        poly<int, P::N> t = {};  // Initialize with 0
+        t[0] = mu ? 1 : 0;
+        return encrypt_poly_int(rng, skey, t);
+    }
+};
+
+template <class P>
 void sample_extract_index(tlwe_lvl1<P> &out, const trlwe_lvl1<P> &trlwe,
                           size_t k) noexcept
 {
@@ -291,6 +339,87 @@ void sample_extract_index(tlwe_lvl1<P> &out, const trlwe_lvl1<P> &trlwe,
             out.a(i) = trlwe.a[k - i];
         else
             out.a(i) = -trlwe.a[N + k - i];
+}
+
+template <class P>
+void decompose(std::array<poly<torus, P::N>, P::l> &out,
+               const poly<torus, P::N> &a)
+{
+    constexpr torus Bg = P::Bg;
+    constexpr size_t l = P::l, N = P::N, Bgbit = P::Bgbit;
+
+    torus offset = 0;
+    for (size_t i = 0; i < l; i++)
+        offset += Bg / 2 * (1u << (32 - (i + 1) * Bgbit));
+
+    poly<torus, P::N> a_tilde;
+    for (size_t i = 0; i < N; i++)
+        a_tilde[i] = a[i] + offset;
+
+    for (size_t i = 0; i < l; i++)
+        for (size_t j = 0; j < N; j++)
+            out[i][j] =
+                ((a_tilde[j] >> (32 - Bgbit * (i + 1))) & (Bg - 1)) - Bg / 2;
+}
+
+template <class P>
+void external_product(trlwe_lvl1<P> &out, const trgsw_lvl1<P> &trgsw,
+                      const trlwe_lvl1<P> &trlwe)
+{
+    std::array<poly<torus, P::N>, P::l> dec_a, dec_b;
+    decompose<P>(dec_a, trlwe.a);
+    decompose<P>(dec_b, trlwe.b);
+
+    // Initialize with 0
+    for (size_t i = 0; i < P::N; i++) {
+        out.a[i] = 0;
+        out.b[i] = 0;
+    }
+
+    poly<torus, P::N> tmp;
+    for (size_t i = 0; i < P::l; i++) {
+        // out.a += dec_a[i] * trgsw[i].a
+        poly_mult(/* out */ tmp, dec_a[i], trgsw[i].a);
+        for (size_t j = 0; j < P::N; j++)
+            out.a[j] += tmp[j];
+        // out.a += dec_b[i] * trgsw[l + i].a
+        poly_mult(/* out */ tmp, dec_b[i], trgsw[P::l + i].a);
+        for (size_t j = 0; j < P::N; j++)
+            out.a[j] += tmp[j];
+
+        // out.b += dec_a[i] * trgsw[i].b
+        poly_mult(/* out */ tmp, dec_a[i], trgsw[i].b);
+        for (size_t j = 0; j < P::N; j++)
+            out.b[j] += tmp[j];
+        // out.b += dec_b[i] * trgsw[l + i].b
+        poly_mult(/* out */ tmp, dec_b[i], trgsw[P::l + i].b);
+        for (size_t j = 0; j < P::N; j++)
+            out.b[j] += tmp[j];
+    }
+}
+
+template <class P>
+void cmux(trlwe_lvl1<P> &out, const trgsw_lvl1<P> &cond,
+          const trlwe_lvl1<P> &thn, const trlwe_lvl1<P> &els)
+{
+    const trlwe_lvl1<P> &trlwe0 = els, &trlwe1 = thn;
+
+    // tmp0 = (a1[X], b1[X]) - (a0[X], b0[X])
+    trlwe_lvl1<P> tmp0;
+    for (size_t i = 0; i < P::N; i++) {
+        tmp0.a[i] = trlwe1.a[i] - trlwe0.a[i];
+        tmp0.b[i] = trlwe1.b[i] - trlwe0.b[i];
+    }
+
+    // tmp1 = external_product(cond, tmp0)
+    trlwe_lvl1<P> tmp1;
+    external_product(/* out */ tmp1, cond, tmp0);
+
+    // out = tmp1 + trlwe0
+    for (size_t i = 0; i < P::N; i++) {
+        out.a[i] = tmp1.a[i] + trlwe0.a[i];
+        out.b[i] = tmp1.b[i] + trlwe0.b[i];
+    }
 }
 
 //////////////////////////////
@@ -373,6 +502,49 @@ void test_trlwe(unsigned int seed, const secret_key<P> &s)
     }
 }
 
+template <class P>
+void test_external_product(unsigned int seed, const secret_key<P> &s)
+{
+    debug_log("test_external_product:");
+    std::default_random_engine prng{seed};
+
+    auto m = random_bool_array<P::N>(prng);
+    auto c = random_bool_value(prng);
+    auto trlwe = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, m);
+    auto trgsw = trgsw_lvl1<P>::encrypt_bool(prng, s, c);
+    trlwe_lvl1<P> res;
+    external_product(res, trgsw, trlwe);
+    typename trlwe_lvl1<P>::poly_bool res_plain = res.decrypt_poly_bool(s);
+    debug_log("\t[0] ", c ? m[0] : 0, " == ", res_plain[0]);
+    if (c)
+        TEST_ASSERT(m == res_plain);
+    else
+        for (size_t i = 0; i < P::N; i++)
+            TEST_ASSERT(res_plain[i] == 0);
+}
+
+template <class P>
+void test_cmux(unsigned int seed, const secret_key<P> &s)
+{
+    debug_log("test_cmux:");
+    std::default_random_engine prng{seed};
+
+    auto t_plain = random_bool_array<P::N>(prng);
+    auto f_plain = random_bool_array<P::N>(prng);
+    auto c_plain = random_bool_value(prng);
+    auto t = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, t_plain);
+    auto f = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, f_plain);
+    auto c = trgsw_lvl1<P>::encrypt_bool(prng, s, c_plain);
+
+    trlwe_lvl1<P> res;
+    cmux(res, c, t, f);
+    typename trlwe_lvl1<P>::poly_bool res_plain = res.decrypt_poly_bool(s);
+
+    debug_log("\t[0] ", c_plain, " ? ", t_plain[0], " : ", f_plain[0],
+              " == ", res_plain[0]);
+    TEST_ASSERT((c_plain ? t_plain : f_plain) == res_plain);
+}
+
 template <class Proc>
 auto timeit(Proc &&proc)
 {
@@ -407,6 +579,8 @@ void test(size_t N, size_t M)
 
             test_tlwe<P>(seed, skey);
             test_trlwe<P>(seed, skey);
+            test_external_product<P>(seed, skey);
+            test_cmux<P>(seed, skey);
 
             debug_log("==============================");
             debug_log("");
