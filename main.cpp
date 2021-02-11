@@ -24,6 +24,24 @@ void debug_log(Args &&... args)
         (std::cerr << ... << args) << std::endl;
 }
 
+// Calculate out = (lhs * rhs) mod (X^N + 1),
+// where length(lhs) = length(rhs) = N
+template <class T, class T1, class T2, size_t N>
+void poly_mult(poly<T, N> &out, const poly<T1, N> &lhs,
+               const poly<T2, N> &rhs) noexcept
+{
+    // Initialize with 0
+    for (T &v : out)
+        v = 0;
+
+    for (size_t i = 0; i < N; i++)
+        for (size_t j = 0; j < N; j++)
+            if (i + j < N)
+                out[i + j] += lhs[i] * rhs[j];
+            else
+                out[i + j - N] -= lhs[i] * rhs[j];
+}
+
 torus double2torus(double src)
 {
     return static_cast<torus>(
@@ -184,6 +202,96 @@ struct tlwe {
 
 template <class P>
 using tlwe_lvl0 = impl::tlwe<P, 0>;
+template <class P>
+using tlwe_lvl1 = impl::tlwe<P, 1>;
+
+template <class P>
+struct trlwe_lvl1 {
+    using poly_torus = poly<torus, P::N>;
+    using poly_bool = poly<bool, P::N>;
+
+    poly_torus a, b;
+
+    template <RandGen RG>
+    static trlwe_lvl1 encrypt_poly_torus(RG &rng, const secret_key<P> &skey,
+                                         const poly_torus &m)
+    {
+        trlwe_lvl1 trlwe;
+        poly_torus &a = trlwe.a, &b = trlwe.b;
+        const poly_torus &s = skey.lvl1;
+
+        // a[X] <- U_{T_N[X]}
+        for (torus &t : a)
+            t = torus_uniform(rng);
+
+        // e[X] <- D_{T_N[X], alpha_bk}
+        poly_torus e;
+        for (torus &t : e)
+            t = torus_modular_normal(rng, P::alpha_bk);
+
+        // b[X] = a[X] * s[X] + m[X] + e[X]
+        poly_mult(/* out */ b, a, s);
+        for (size_t i = 0; i < P::N; i++)
+            b[i] += m[i] + e[i];
+
+        return trlwe;
+    }
+
+    template <RandGen RG>
+    static trlwe_lvl1 encrypt_zero(RG &rng, const secret_key<P> &skey)
+    {
+        poly_torus m = {};  // Initialize with 0
+        return encrypt_poly_torus(rng, skey, m);
+    }
+
+    template <RandGen RG>
+    static trlwe_lvl1 encrypt_poly_bool(RG &rng, const secret_key<P> &skey,
+                                        const poly_bool &m)
+    {
+        const torus mu = 1u << 29;  // 1/8
+        poly_torus t;
+        for (size_t i = 0; i < P::N; i++)
+            t[i] = m[i] ? mu : -mu;
+        return encrypt_poly_torus(rng, skey, t);
+    }
+
+    poly_torus decrypt_poly_torus(const secret_key<P> &skey) const noexcept
+    {
+        const poly_torus &a = this->a, &b = this->b, &s = skey.lvl1;
+
+        // m[X] = b[X] - a[X] * s[X] - e[X]
+        poly_torus m, as;
+        poly_mult(/* out */ as, a, s);
+        for (size_t i = 0; i < P::N; i++)
+            m[i] = b[i] - as[i];
+
+        return m;
+    }
+
+    poly_bool decrypt_poly_bool(const secret_key<P> &skey) const noexcept
+    {
+        poly_torus t = decrypt_poly_torus(skey);
+        poly_bool m;
+        for (size_t i = 0; i < P::N; i++)
+            m[i] = static_cast<int32_t>(t[i]) > 0 ? true : false;
+        return m;
+    }
+};
+
+template <class P>
+void sample_extract_index(tlwe_lvl1<P> &out, const trlwe_lvl1<P> &trlwe,
+                          size_t k) noexcept
+{
+    constexpr size_t N = P::N;
+    assert(k < N);
+
+    out.b() = trlwe.b[k];
+    for (size_t i = 0; i < N; i++)
+        if (i <= k)
+            out.a(i) = trlwe.a[k - i];
+        else
+            out.a(i) = -trlwe.a[N + k - i];
+}
 
 //////////////////////////////
 //// TEST
@@ -241,6 +349,30 @@ void test_tlwe(unsigned int seed, const secret_key<P> &s)
     }
 }
 
+template <class P>
+void test_trlwe(unsigned int seed, const secret_key<P> &s)
+{
+    debug_log("test_trlwe:");
+
+    std::default_random_engine prng{seed};
+
+    {
+        auto m = random_bool_array<P::N>(prng);
+        auto trlwe = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, m);
+        typename trlwe_lvl1<P>::poly_bool m_ = trlwe.decrypt_poly_bool(s);
+        debug_log("\t[0] ", m[0], " == ", m_[0]);
+        TEST_ASSERT(m == m_);
+    }
+
+    {
+        auto trlwe = trlwe_lvl1<P>::encrypt_zero(prng, s);
+        auto m = trlwe.decrypt_poly_torus(s);
+        debug_log("\t[0] ", m[0], " == ", 0);
+        for (size_t i = 0; i < P::N; i++)
+            TEST_ASSERT(m[i] == 0);
+    }
+}
+
 template <class Proc>
 auto timeit(Proc &&proc)
 {
@@ -274,6 +406,7 @@ void test(size_t N, size_t M)
             debug_log(j * M + i, " (SEED: ", seed, ")");
 
             test_tlwe<P>(seed, skey);
+            test_trlwe<P>(seed, skey);
 
             debug_log("==============================");
             debug_log("");
