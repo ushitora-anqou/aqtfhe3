@@ -397,6 +397,45 @@ struct bootstrapping_key {
 };
 
 template <class P>
+struct key_switching_key {
+    std::array<tlwe_lvl0<P>, P::N * P::t *((1 << P::basebit) - 1)> data;
+
+    tlwe_lvl0<P> &operator()(size_t i, size_t j, size_t k)
+    {
+        constexpr size_t t = P::t, base = (1 << P::basebit);
+        return data[k + (base - 1) * (j + t * i)];
+    }
+
+    const tlwe_lvl0<P> &operator()(size_t i, size_t j, size_t k) const
+    {
+        constexpr size_t t = P::t, base = (1 << P::basebit);
+        return data[k + (base - 1) * (j + t * i)];
+    }
+
+    template <RandGen RG>
+    static std::shared_ptr<key_switching_key> make_ptr(
+        RG &rng, const secret_key<P> &skey)
+    {
+        constexpr size_t N = P::N, t = P::t, basebit = P::basebit,
+                         base = (1 << basebit);
+
+        auto ks = std::make_shared<key_switching_key>();
+        for (size_t i = 0; i < N; i++) {
+            for (size_t j = 0; j < t; j++) {
+                for (size_t k = 1; k <= base - 1; k++) {  // Ignore k = 0
+                    torus p =
+                        k * skey.lvl1[i] * (1u << (32 - basebit * (j + 1)));
+                    (*ks)(i, j, k - 1) =
+                        tlwe_lvl0<P>::encrypt_torus(rng, skey, p);
+                }
+            }
+        }
+
+        return ks;
+    }
+};
+
+template <class P>
 void sample_extract_index(tlwe_lvl1<P> &out, const trlwe_lvl1<P> &trlwe,
                           size_t k) noexcept
 {
@@ -532,6 +571,33 @@ constexpr trlwe_lvl1<P> gate_bootstrapping_test_vector()
     for (size_t i = 0; i < P::N; i++)
         m[i] = mu;
     return trlwe_lvl1<P>::trivial_encrypt_poly_torus(m);
+}
+
+template <class P>
+void identity_key_switch(tlwe_lvl0<P> &out, const tlwe_lvl1<P> &src,
+                         const key_switching_key<P> &ks)
+{
+    constexpr size_t n = P::n, N = P::N, bb = P::basebit, t = P::t;
+
+    out.b() = src.b();
+    for (size_t i = 0; i < n; i++)
+        out.a(i) = 0;
+
+    size_t prec_offset = 1u << (32 - (1 + bb * t));
+    for (size_t i = 0; i < N; i++) {
+        size_t abar = src.a(i) + prec_offset;
+        for (size_t j = 0; j < t; j++) {
+            size_t k = (abar >> (32 - (j + 1) * bb)) & ((1u << bb) - 1);
+            if (k == 0)
+                continue;
+
+            // (a_tilda, b_tilda) -= KS_ijk
+            auto &ks_ijk = ks(i, j, k - 1);
+            for (size_t l = 0; l < n; l++)
+                out.a(l) -= ks_ijk.a(l);
+            out.b() -= ks_ijk.b();
+        }
+    }
 }
 
 //////////////////////////////
@@ -678,6 +744,23 @@ void test_blind_rotate(unsigned int seed, const secret_key<P> &s,
     TEST_ASSERT(plain == res_plain);
 }
 
+template <class P>
+void test_identity_key_switch(unsigned int seed, const secret_key<P> &s)
+{
+    debug_log("test_identity_key_switch:");
+    std::default_random_engine prng{seed};
+
+    auto ks = key_switching_key<P>::make_ptr(prng, s);
+    bool plain = random_bool_value(prng);
+    auto tlwe1 = tlwe_lvl1<P>::encrypt_bool(prng, s, plain);
+    tlwe_lvl0<P> tlwe0;
+    identity_key_switch(tlwe0, tlwe1, *ks);
+    bool res_plain = tlwe0.decrypt_bool(s);
+
+    debug_log("\t", plain, " == ", res_plain);
+    TEST_ASSERT(plain == res_plain);
+}
+
 template <class Proc>
 auto timeit(Proc &&proc)
 {
@@ -716,6 +799,7 @@ void test(size_t N, size_t M)
             test_external_product<P>(seed, skey);
             test_cmux<P>(seed, skey);
             test_blind_rotate<P>(seed, skey, *bkey);
+            test_identity_key_switch<P>(seed, skey);
 
             debug_log("==============================");
             debug_log("");
