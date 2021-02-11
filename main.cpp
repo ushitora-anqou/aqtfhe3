@@ -598,6 +598,36 @@ void identity_key_switch(tlwe_lvl0<P> &out, const tlwe_lvl1<P> &src,
     }
 }
 
+template <class P>
+void gate_bootstrapping_tlwe_to_tlwe(tlwe_lvl1<P> &out, const tlwe_lvl0<P> &src,
+                                     const bootstrapping_key<P> &bkey)
+{
+    constexpr auto testvec = gate_bootstrapping_test_vector<P>();
+
+    trlwe_lvl1<P> trlwe;
+    blind_rotate(/* out */ trlwe, src, testvec, bkey);
+    sample_extract_index(/* out */ out, trlwe, 0);
+}
+
+template <class P>
+void hom_nand(tlwe_lvl0<P> &out, const tlwe_lvl0<P> &lhs,
+              const tlwe_lvl0<P> &rhs, const bootstrapping_key<P> &bkey,
+              const key_switching_key<P> &ks)
+{
+    // out = ((0, 1/8) - lhs - rhs) |> gate bootstrapping |> identity key switch
+    constexpr size_t n = P::n;
+    const torus mu = 1u << 29;  // 1/8
+
+    tlwe_lvl0<P> tlwe;
+    for (size_t i = 0; i < n; i++)
+        tlwe.a(i) = -lhs.a(i) - rhs.a(i);
+    tlwe.b() = mu - lhs.b() - rhs.b();
+
+    tlwe_lvl1<P> tlwe1;
+    gate_bootstrapping_tlwe_to_tlwe(/* out */ tlwe1, tlwe, bkey);
+    identity_key_switch(/* out */ out, tlwe1, ks);
+}
+
 //////////////////////////////
 //// TEST
 //////////////////////////////
@@ -759,6 +789,26 @@ void test_identity_key_switch(unsigned int seed, const secret_key<P> &s)
     TEST_ASSERT(plain == res_plain);
 }
 
+template <class P>
+void test_hom_nand(unsigned int seed, const secret_key<P> &s,
+                   const bootstrapping_key<P> &b)
+{
+    debug_log("test_hom_nand:");
+    std::default_random_engine prng{seed};
+
+    auto ks = key_switching_key<P>::make_ptr(prng, s);
+    bool lhs = random_bool_value(prng), rhs = random_bool_value(prng);
+    auto lhs_tlwe = tlwe_lvl0<P>::encrypt_bool(prng, s, lhs),
+         rhs_tlwe = tlwe_lvl0<P>::encrypt_bool(prng, s, rhs);
+
+    tlwe_lvl0<P> res_tlwe;
+    hom_nand(/* out */ res_tlwe, lhs_tlwe, rhs_tlwe, b, *ks);
+    bool res = res_tlwe.decrypt_bool(s);
+
+    debug_log("\t", "nand(", lhs, ", ", rhs, ") = ", res);
+    TEST_ASSERT((!(lhs & rhs)) == res);
+}
+
 template <class Proc>
 auto timeit(Proc &&proc)
 {
@@ -798,6 +848,7 @@ void test(size_t N, size_t M)
             test_cmux<P>(seed, skey);
             test_blind_rotate<P>(seed, skey, *bkey);
             test_identity_key_switch<P>(seed, skey);
+            test_hom_nand<P>(seed, skey, *bkey);
 
             debug_log("==============================");
             debug_log("");
