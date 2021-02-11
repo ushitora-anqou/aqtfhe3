@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <random>
 
 template <class G>
@@ -22,6 +23,27 @@ void debug_log(Args &&... args)
     const char *envvar = std::getenv("AQTFHE3_VERBOSE");
     if (envvar != nullptr && std::strcmp(envvar, "1") == 0)
         (std::cerr << ... << args) << std::endl;
+}
+
+// Calculate out = (X^k * poly) mod (X^N + 1),
+// where 0 <= k < 2 * N and length(poly) = N
+template <class T, class T1, size_t N>
+void poly_mult_by_X_k(poly<T, N> &out, const poly<T1, N> &poly,
+                      size_t k) noexcept
+{
+    if (k < N) {
+        for (size_t i = 0; i < N - k; i++)
+            out[i + k] = poly[i];
+        for (size_t i = N - k; i < N; i++)
+            out[i + k - N] = -poly[i];
+    }
+    else {
+        const size_t l = k - N;
+        for (size_t i = 0; i < N - l; i++)
+            out[i + l] = -poly[i];
+        for (size_t i = N - l; i < N; i++)
+            out[i + l - N] = poly[i];
+    }
 }
 
 // Calculate out = (lhs * rhs) mod (X^N + 1),
@@ -255,6 +277,16 @@ struct trlwe_lvl1 {
         return encrypt_poly_torus(rng, skey, t);
     }
 
+    // Generate trivial ciphertext
+    static constexpr trlwe_lvl1 trivial_encrypt_poly_torus(const poly_torus &m)
+    {
+        trlwe_lvl1 trlwe;
+        for (size_t i = 0; i < P::N; i++)
+            trlwe.a[i] = 0;
+        trlwe.b = m;
+        return trlwe;
+    }
+
     poly_torus decrypt_poly_torus(const secret_key<P> &skey) const noexcept
     {
         const poly_torus &a = this->a, &b = this->b, &s = skey.lvl1;
@@ -323,6 +355,44 @@ struct trgsw_lvl1 {
         poly<int, P::N> t = {};  // Initialize with 0
         t[0] = mu ? 1 : 0;
         return encrypt_poly_int(rng, skey, t);
+    }
+};
+
+template <class P>
+struct bootstrapping_key {
+    std::array<trgsw_lvl1<P>, P::n> data;
+
+    bootstrapping_key()
+    {
+    }
+
+    bootstrapping_key(const bootstrapping_key &that)
+    {
+        this->data = that.data;
+    }
+
+    template <RandGen RG>
+    bootstrapping_key(RG &rng, const secret_key<P> &skey)
+    {
+        // Encrypt every bit of secret key as TRGSWlvl1
+        for (size_t i = 0; i < P::n; i++) {
+            auto trgsw = trgsw_lvl1<P>::encrypt_bool(rng, skey, skey.lvl0[i]);
+            data[i] = trgsw_lvl1<P>{trgsw};
+        }
+    }
+
+    // NOTE: struct bootstrapping_key needs large space of memory. Allocating it
+    // on stack may cause segmentaion fault.
+    template <RandGen RG>
+    static std::shared_ptr<bootstrapping_key> make_ptr(
+        RG &rng, const secret_key<P> &skey)
+    {
+        return std::make_shared<bootstrapping_key>(rng, skey);
+    }
+
+    const trgsw_lvl1<P> &operator[](size_t i) const noexcept
+    {
+        return data[i];
     }
 };
 
@@ -422,6 +492,46 @@ void cmux(trlwe_lvl1<P> &out, const trgsw_lvl1<P> &cond,
         out.a[i] = tmp1.a[i] + trlwe0.a[i];
         out.b[i] = tmp1.b[i] + trlwe0.b[i];
     }
+}
+
+template <class P>
+void blind_rotate(trlwe_lvl1<P> &out, const tlwe_lvl0<P> &src,
+                  const trlwe_lvl1<P> &testvec,
+                  const bootstrapping_key<P> &bkey)
+{
+    constexpr size_t n = P::n, N = P::N, Nbit = P::Nbit;
+    const size_t b_tilda =
+        2 * N - ((src.b() + (1u << (31 - Nbit - 1))) >> (32 - Nbit - 1));
+
+    // Initialize out = X^{b_tilda} * (a[X], b[X])
+    for (size_t i = 0; i < N; i++)
+        out.a[i] = out.b[i] = 0;
+    poly_mult_by_X_k(out.a, testvec.a, b_tilda);
+    poly_mult_by_X_k(out.b, testvec.b, b_tilda);
+
+    for (size_t i = 0; i < n; i++) {
+        const size_t a_tilda =
+            (src.a(i) + (1 << (31 - Nbit - 1))) >> (32 - Nbit - 1);
+        const trlwe_lvl1<P> trlwe0 = out;
+
+        // Let trlwe1 = X^{a_tilda} * trlwe0
+        trlwe_lvl1<P> trlwe1 = {};  // Initialize with 0.
+        poly_mult_by_X_k(trlwe1.a, trlwe0.a, a_tilda);
+        poly_mult_by_X_k(trlwe1.b, trlwe0.b, a_tilda);
+
+        // out = dec(bkey[i]) ? (X^{a_tilda} * out) : out
+        cmux(out, bkey[i], trlwe1, trlwe0);
+    }
+}
+
+template <class P>
+constexpr trlwe_lvl1<P> gate_bootstrapping_test_vector()
+{
+    constexpr torus mu = 1u << 29;  // 1/8
+    typename trlwe_lvl1<P>::poly_torus m;
+    for (size_t i = 0; i < P::N; i++)
+        m[i] = mu;
+    return trlwe_lvl1<P>::trivial_encrypt_poly_torus(m);
 }
 
 //////////////////////////////
@@ -547,6 +657,27 @@ void test_cmux(unsigned int seed, const secret_key<P> &s)
     TEST_ASSERT((c_plain ? t_plain : f_plain) == res_plain);
 }
 
+template <class P>
+void test_blind_rotate(unsigned int seed, const secret_key<P> &s,
+                       const bootstrapping_key<P> &b)
+{
+    debug_log("test_blind_rotate:");
+    std::default_random_engine prng{seed};
+
+    auto plain = random_bool_value(prng);
+    auto tlwe = tlwe_lvl0<P>::encrypt_bool(prng, s, plain);
+    constexpr auto testvec = gate_bootstrapping_test_vector<P>();
+
+    trlwe_lvl1<P> res_trlwe;
+    tlwe_lvl1<P> res_tlwe;
+    blind_rotate(res_trlwe, tlwe, testvec, b);
+    sample_extract_index(res_tlwe, res_trlwe, 0);
+    auto res_plain = res_tlwe.decrypt_bool(s);
+
+    debug_log("\t", plain, " == ", res_plain);
+    TEST_ASSERT(plain == res_plain);
+}
+
 template <class Proc>
 auto timeit(Proc &&proc)
 {
@@ -563,7 +694,7 @@ void test(size_t N, size_t M)
 
     for (size_t j = 0; j < N; j++) {
         // Generate secret key and corresponding bootstrapping key
-        const auto skey = [j] {
+        const auto [skey, bkey] = [j] {
             unsigned int seed = std::random_device{}();
             // !!! CAVEAT !!!: std::default_random_engine is NOT
             // cryptographically secure. DO NOT use it in production!
@@ -571,7 +702,8 @@ void test(size_t N, size_t M)
 
             debug_log("Generating secret key (", j, ") (SEED: ", seed, ")");
             auto skey = secret_key<P>{prng};
-            return skey;
+            auto bkey = bootstrapping_key<P>::make_ptr(prng, skey);
+            return std::make_pair(skey, bkey);
         }();
 
         for (size_t i = 0; i < M; i++) {
@@ -583,6 +715,7 @@ void test(size_t N, size_t M)
             test_trlwe<P>(seed, skey);
             test_external_product<P>(seed, skey);
             test_cmux<P>(seed, skey);
+            test_blind_rotate<P>(seed, skey, *bkey);
 
             debug_log("==============================");
             debug_log("");
