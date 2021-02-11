@@ -7,7 +7,7 @@ CXXFLAGS_RELEASE=$(CXXFLAGS) -Ofast -march=native -DNDEBUG #-g3
 INC=
 LIB=
 SOURCE=main.cpp
-HEADER=params.hpp
+HEADER=params.hpp spxlios.hpp
 
 main: $(SOURCE) $(HEADER)
 	#clang++ $(CXXFLAGS_SANITIZE) -o $@ $(SOURCE) $(INC) $(LIB)
