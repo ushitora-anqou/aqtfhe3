@@ -1,5 +1,7 @@
 #include "params.hpp"
 
+#include "spxlios.hpp"
+
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -25,6 +27,37 @@ void debug_log(Args &&... args)
         (std::cerr << ... << args) << std::endl;
 }
 
+template <size_t N>
+class fft_processor {
+    static_assert(N >= 16, "N must be >=16");
+    static_assert((N & (N - 1)) == 0, "N must be a power of 2");
+
+private:
+    spxlios::processor<N> spxlios_;
+
+public:
+    fft_processor()
+    {
+    }
+
+    void twist_fft_lvl1(std::array<uint32_t, N> &out,
+                        const std::array<double, N> &src)
+    {
+        spxlios_.execute_direct_torus32(out, src);
+    }
+
+    void twist_ifft_lvl1(std::array<double, N> &out,
+                         const std::array<uint32_t, N> &src)
+    {
+        spxlios_.execute_reverse_torus32(out, src);
+    }
+};
+
+namespace {
+template <size_t N>
+fft_processor<N> fftproc;
+}
+
 // Calculate out = (X^k * poly) mod (X^N + 1),
 // where 0 <= k < 2 * N and length(poly) = N
 template <class T, class T1, size_t N>
@@ -46,22 +79,41 @@ void poly_mult_by_X_k(poly<T, N> &out, const poly<T1, N> &poly,
     }
 }
 
-// Calculate out = (lhs * rhs) mod (X^N + 1),
-// where length(lhs) = length(rhs) = N
-template <class T, class T1, class T2, size_t N>
-void poly_mult(poly<T, N> &out, const poly<T1, N> &lhs,
-               const poly<T2, N> &rhs) noexcept
+template <size_t N>
+void mul_in_fd(std::array<double, N> &res, const std::array<double, N> &a,
+               const std::array<double, N> &b)
 {
-    // Initialize with 0
-    for (T &v : out)
-        v = 0;
+    for (size_t i = 0; i < N / 2; i++) {
+        double aimbim = a[i + N / 2] * b[i + N / 2];
+        double arebim = a[i] * b[i + N / 2];
+        res[i] = a[i] * b[i] - aimbim;
+        res[i + N / 2] = a[i + N / 2] * b[i] + arebim;
+    }
+}
 
-    for (size_t i = 0; i < N; i++)
-        for (size_t j = 0; j < N; j++)
-            if (i + j < N)
-                out[i + j] += lhs[i] * rhs[j];
-            else
-                out[i + j - N] -= lhs[i] * rhs[j];
+template <size_t N>
+void fma_in_fd(std::array<double, N> &res, const std::array<double, N> &a,
+               const std::array<double, N> &b)
+{
+    for (size_t i = 0; i < N / 2; i++) {
+        res[i] = a[i + N / 2] * b[i + N / 2] - res[i];
+        res[i] = a[i] * b[i] - res[i];
+        res[i + N / 2] += a[i] * b[i + N / 2];
+        res[i + N / 2] += a[i + N / 2] * b[i];
+    }
+}
+
+// Calculate out = (lhs * rhs) mod (X^N + 1) using FFT,
+// where length(lhs) = length(rhs) = N
+template <size_t N>
+void poly_mult(poly<uint32_t, N> &out, const poly<uint32_t, N> &lhs,
+               const poly<uint32_t, N> &rhs)
+{
+    std::array<double, N> lhs_fft, rhs_fft, tmp;
+    fftproc<N>.twist_ifft_lvl1(lhs_fft, lhs);
+    fftproc<N>.twist_ifft_lvl1(rhs_fft, rhs);
+    mul_in_fd(tmp, lhs_fft, rhs_fft);
+    fftproc<N>.twist_fft_lvl1(out, tmp);
 }
 
 torus double2torus(double src)
@@ -359,8 +411,33 @@ struct trgsw_lvl1 {
 };
 
 template <class P>
+struct trgsw_lvl1_fft {
+    struct body {
+        std::array<double, P::N> a, b;
+    };
+    std::array<body, 2 * P::l> data;
+
+    trgsw_lvl1_fft()
+    {
+    }
+
+    trgsw_lvl1_fft(const trgsw_lvl1<P> &src)
+    {
+        for (size_t i = 0; i < 2 * P::l; i++) {
+            fftproc<P::N>.twist_ifft_lvl1(data[i].a, src[i].a);
+            fftproc<P::N>.twist_ifft_lvl1(data[i].b, src[i].b);
+        }
+    }
+
+    const body &operator[](size_t i) const noexcept
+    {
+        return data[i];
+    }
+};
+
+template <class P>
 struct bootstrapping_key {
-    std::array<trgsw_lvl1<P>, P::n> data;
+    std::array<trgsw_lvl1_fft<P>, P::n> data;
 
     bootstrapping_key()
     {
@@ -377,7 +454,7 @@ struct bootstrapping_key {
         // Encrypt every bit of secret key as TRGSWlvl1
         for (size_t i = 0; i < P::n; i++) {
             auto trgsw = trgsw_lvl1<P>::encrypt_bool(rng, skey, skey.lvl0[i]);
-            data[i] = trgsw_lvl1<P>{trgsw};
+            data[i] = trgsw_lvl1_fft<P>{trgsw};
         }
     }
 
@@ -390,7 +467,7 @@ struct bootstrapping_key {
         return std::make_shared<bootstrapping_key>(rng, skey);
     }
 
-    const trgsw_lvl1<P> &operator[](size_t i) const noexcept
+    const trgsw_lvl1_fft<P> &operator[](size_t i) const noexcept
     {
         return data[i];
     }
@@ -474,43 +551,39 @@ void decompose(std::array<poly<torus, P::N>, P::l> &out,
 }
 
 template <class P>
-void external_product(trlwe_lvl1<P> &out, const trgsw_lvl1<P> &trgsw,
+void external_product(trlwe_lvl1<P> &out, const trgsw_lvl1_fft<P> &trgsw_fft,
                       const trlwe_lvl1<P> &trlwe)
 {
-    std::array<poly<torus, P::N>, P::l> dec_a, dec_b;
+    constexpr size_t l = P::l, N = P::N;
+
+    // Decompose trlwe
+    std::array<poly<torus, N>, l> dec_a, dec_b;
     decompose<P>(dec_a, trlwe.a);
     decompose<P>(dec_b, trlwe.b);
 
-    // Initialize with 0
-    for (size_t i = 0; i < P::N; i++) {
-        out.a[i] = 0;
-        out.b[i] = 0;
-    }
-
-    poly<torus, P::N> tmp;
+    // Apply inverse FFT to decomposed trlwe
+    std::array<std::array<double, N>, l> dec_a_fft, dec_b_fft;
     for (size_t i = 0; i < P::l; i++) {
-        // out.a += dec_a[i] * trgsw[i].a
-        poly_mult(/* out */ tmp, dec_a[i], trgsw[i].a);
-        for (size_t j = 0; j < P::N; j++)
-            out.a[j] += tmp[j];
-        // out.a += dec_b[i] * trgsw[l + i].a
-        poly_mult(/* out */ tmp, dec_b[i], trgsw[P::l + i].a);
-        for (size_t j = 0; j < P::N; j++)
-            out.a[j] += tmp[j];
-
-        // out.b += dec_a[i] * trgsw[i].b
-        poly_mult(/* out */ tmp, dec_a[i], trgsw[i].b);
-        for (size_t j = 0; j < P::N; j++)
-            out.b[j] += tmp[j];
-        // out.b += dec_b[i] * trgsw[l + i].b
-        poly_mult(/* out */ tmp, dec_b[i], trgsw[P::l + i].b);
-        for (size_t j = 0; j < P::N; j++)
-            out.b[j] += tmp[j];
+        fftproc<N>.twist_ifft_lvl1(dec_a_fft[i], dec_a[i]);
+        fftproc<N>.twist_ifft_lvl1(dec_b_fft[i], dec_b[i]);
     }
+
+    // Do multiplication
+    std::array<double, N> out_a_fft = {}, out_b_fft = {};  // Initialize with 0
+    for (size_t i = 0; i < l; i++) {
+        fma_in_fd(out_a_fft, dec_a_fft[i], trgsw_fft[i].a);
+        fma_in_fd(out_a_fft, dec_b_fft[i], trgsw_fft[l + i].a);
+        fma_in_fd(out_b_fft, dec_a_fft[i], trgsw_fft[i].b);
+        fma_in_fd(out_b_fft, dec_b_fft[i], trgsw_fft[l + i].b);
+    }
+
+    // Apply FFT
+    fftproc<N>.twist_fft_lvl1(out.a, out_a_fft);
+    fftproc<N>.twist_fft_lvl1(out.b, out_b_fft);
 }
 
 template <class P>
-void cmux(trlwe_lvl1<P> &out, const trgsw_lvl1<P> &cond,
+void cmux(trlwe_lvl1<P> &out, const trgsw_lvl1_fft<P> &cond,
           const trlwe_lvl1<P> &thn, const trlwe_lvl1<P> &els)
 {
     const trlwe_lvl1<P> &trlwe0 = els, &trlwe1 = thn;
@@ -710,6 +783,7 @@ void test_trlwe(unsigned int seed, const secret_key<P> &s)
     }
 }
 
+/*
 template <class P>
 void test_external_product(unsigned int seed, const secret_key<P> &s)
 {
@@ -730,6 +804,7 @@ void test_external_product(unsigned int seed, const secret_key<P> &s)
         for (size_t i = 0; i < P::N; i++)
             TEST_ASSERT(res_plain[i] == 0);
 }
+*/
 
 template <class P>
 void test_cmux(unsigned int seed, const secret_key<P> &s)
@@ -742,7 +817,7 @@ void test_cmux(unsigned int seed, const secret_key<P> &s)
     auto c_plain = random_bool_value(prng);
     auto t = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, t_plain);
     auto f = trlwe_lvl1<P>::encrypt_poly_bool(prng, s, f_plain);
-    auto c = trgsw_lvl1<P>::encrypt_bool(prng, s, c_plain);
+    auto c = trgsw_lvl1_fft<P>{trgsw_lvl1<P>::encrypt_bool(prng, s, c_plain)};
 
     trlwe_lvl1<P> res;
     cmux(res, c, t, f);
@@ -846,7 +921,7 @@ void test(size_t N, size_t M)
 
             test_tlwe<P>(seed, skey);
             test_trlwe<P>(seed, skey);
-            test_external_product<P>(seed, skey);
+            // test_external_product<P>(seed, skey);
             test_cmux<P>(seed, skey);
             test_blind_rotate<P>(seed, skey, *bkey);
             test_identity_key_switch<P>(seed, skey);
