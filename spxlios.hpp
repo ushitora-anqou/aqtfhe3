@@ -904,8 +904,8 @@ public:
           reverse_trig_tables_(detail::reverse_trig_tables<N>()),
           tables_direct_(),
           tables_reverse_(),
-          fft_code_(N, detail::UNROLL_FFT_1 | detail::UNROLL_FFT_5),
-          ifft_code_(N, detail::UNROLL_IFFT_1 | detail::UNROLL_IFFT_5),
+          fft_code_(N, detail::UNROLL_FFT_1),
+          ifft_code_(N, detail::UNROLL_IFFT_1),
           fft_(nullptr),
           ifft_(nullptr)
     {
