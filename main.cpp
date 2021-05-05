@@ -360,6 +360,15 @@ struct trlwe_lvl1 {
             m[i] = static_cast<int32_t>(t[i]) > 0 ? true : false;
         return m;
     }
+
+    trlwe_lvl1<P> operator+=(const trlwe_lvl1<P> &rhs)
+    {
+        for (size_t i = 0; i < P::N; i++) {
+            a[i] += rhs.a[i];
+            b[i] += rhs.b[i];
+        }
+        return *this;
+    }
 };
 
 template <class P>
@@ -975,6 +984,249 @@ double bench_hom_nand()
            static_cast<double>(N);
 }
 
+//////////////////////////
+#include <queue>
+#include <set>
+
+template <class P>
+typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
+{
+    typename trlwe_lvl1<P>::poly_torus w;
+    const torus mu = 1u << 31;  // 1/2
+    for (size_t i = 0; i < P::N; i++)
+        w[i] = ((n >> i) & 1u) ? mu : 0;
+    return w;
+}
+
+template <class P>
+uint64_t weight2uint(const typename trlwe_lvl1<P>::poly_torus &weight)
+{
+    const torus mu25 = 1u << 30, mu75 = (1u << 30) + (1u << 31);
+    uint64_t n = 0;
+    for (size_t i = 0; i < P::N; i++)
+        n |= (((mu25 <= weight[i] && weight[i] <= mu75) ? 1 : 0) << i);
+    return n;
+}
+
+class Graph {
+public:
+    using State = int;
+
+private:
+    struct TableItem {
+        State index, child0, child1;
+        bool final;
+        uint64_t marker;
+    };
+    std::vector<TableItem> table_;
+
+public:
+    Graph()
+    {
+        table_ = {
+            {0, 2, 1, false, 0},     //
+            {1, 3, 1, false, 0},     //
+            {2, 5, 4, false, 0},     //
+            {3, 6, 4, false, 0},     //
+            {4, 7, 1, false, 0},     //
+            {5, 5, 8, false, 0},     //
+            {6, 9, 8, false, 0},     //
+            {7, 10, 4, false, 0},    //
+            {8, 11, 1, false, 0},    //
+            {9, 12, 8, false, 0},    //
+            {10, 13, 8, false, 0},   //
+            {11, 14, 4, false, 0},   //
+            {12, 5, 15, false, 0},   //
+            {13, 12, 16, false, 0},  //
+            {14, 13, 17, false, 0},  //
+            {15, 11, 18, false, 0},  //
+            {16, 11, 19, false, 0},  //
+            {17, 11, 20, false, 0},  //
+            {18, 21, 1, false, 0},   //
+            {19, 22, 1, false, 0},   //
+            {20, 23, 1, false, 0},   //
+            {21, 24, 4, false, 0},   //
+            {22, 6, 25, false, 0},   //
+            {23, 23, 23, true, 1},   // d
+            {24, 9, 26, false, 0},   //
+            {25, 28, 27, false, 0},  //
+            {26, 29, 1, false, 0},   //
+            {27, 30, 1, false, 0},   //
+            {28, 31, 4, false, 0},   //
+            {29, 32, 4, false, 0},   //
+            {30, 33, 4, false, 0},   //
+            {31, 34, 8, false, 0},   //
+            {32, 35, 17, false, 0},  //
+            {33, 36, 8, false, 0},   //
+            {34, 37, 16, false, 0},  //
+            {35, 12, 38, false, 0},  //
+            {36, 12, 39, false, 0},  //
+            {37, 5, 40, false, 0},   //
+            {38, 11, 41, false, 0},  //
+            {39, 11, 42, false, 0},  //
+            {40, 11, 43, false, 0},  //
+            {41, 44, 1, false, 0},   //
+            {42, 45, 1, false, 0},   //
+            {43, 46, 1, false, 0},   //
+            {44, 44, 44, true, 2},   // ab
+            {45, 45, 45, true, 3},   // bc
+            {46, 48, 4, false, 0},   //
+            {47, 28, 49, false, 0},  //
+            {48, 9, 50, false, 0},   //
+            {49, 51, 1, false, 0},   //
+            {50, 52, 1, false, 0},   //
+            {51, 53, 4, false, 0},   //
+            {52, 54, 4, false, 0},   //
+            {53, 55, 8, false, 0},   //
+            {54, 56, 17, false, 0},  //
+            {55, 12, 57, false, 0},  //
+            {56, 12, 58, false, 0},  //
+            {57, 11, 59, false, 0},  //
+            {58, 11, 60, false, 0},  //
+            {59, 61, 1, false, 0},   //
+            {60, 62, 1, false, 0},   //
+            {61, 61, 61, true, 4},   // bc
+            {62, 62, 62, true, 5},   // bab, ab
+            {63, 64, 8, false, 0},   //
+            {64, 12, 65, false, 0},  //
+            {65, 66, 1, false, 0},   //
+            {66, 67, 4, false, 0},   //
+            {67, 13, 68, false, 0},  //
+            {68, 11, 69, false, 0},  //
+            {69, 70, 1, false, 0},   //
+            {70, 70, 70, true, 6},   // d
+            {71, 72, 1, false, 0},   //
+            {72, 10, 73, false, 0},  //
+            {73, 74, 1, false, 0},   //
+            {74, 75, 4, false, 0},   //
+            {75, 13, 76, false, 0},  //
+            {76, 11, 77, false, 0},  //
+            {77, 78, 1, false, 0},   //
+            {78, 78, 78, true, 7},   // abcde
+        };
+    }
+
+    size_t size() const
+    {
+        return table_.size();
+    }
+
+    State next_state(State state, bool input) const
+    {
+        auto &t = table_.at(state);
+        return input ? t.child1 : t.child0;
+    }
+
+    bool is_final_state(State state) const
+    {
+        return table_.at(state).final;
+    }
+
+    State initial_state() const
+    {
+        return 1;
+    }
+
+    uint64_t marker_of_state(State state) const
+    {
+        return table_.at(state).marker;
+    }
+
+    std::vector<State> states_at_depth(size_t depth) const
+    {
+        std::set<int> sts0, sts1;
+        sts0.insert(initial_state());
+        for (size_t i = 0; i < depth; i++) {
+            for (State st : sts0) {
+                sts1.insert(next_state(st, false));
+                sts1.insert(next_state(st, true));
+            }
+            {
+                using std::swap;
+                swap(sts0, sts1);
+            }
+        }
+        return std::vector<State>{sts0.begin(), sts0.end()};
+    }
+};
+
+template <class P>
+trlwe_lvl1<P> trlwe_lvl1_zero()
+{
+    typename trlwe_lvl1<P>::poly_torus m = {};
+    return trlwe_lvl1<P>::trivial_encrypt_poly_torus(m);
+}
+
+template <class P>
+trlwe_lvl1<P> eval_det_wfa(const Graph &gr,
+                           const std::vector<trgsw_lvl1_fft<P>> &input)
+{
+    std::vector<trlwe_lvl1<P>> ci(gr.size(), trlwe_lvl1_zero<P>()),
+        co(gr.size());
+    int d = input.size();
+    for (int j = d - 1; j >= 0; --j) {
+        auto states = gr.states_at_depth(j);
+        for (auto &&q : states) {
+            Graph::State q1 = gr.next_state(q, true),
+                         q0 = gr.next_state(q, false);
+            auto q_w = trlwe_lvl1<P>::trivial_encrypt_poly_torus(
+                     uint2weight<P>(gr.marker_of_state(q))),
+                 q0_w = trlwe_lvl1<P>::trivial_encrypt_poly_torus(
+                     uint2weight<P>(gr.marker_of_state(q0))),
+                 q1_w = trlwe_lvl1<P>::trivial_encrypt_poly_torus(
+                     uint2weight<P>(gr.marker_of_state(q1)));
+            auto thn = ci.at(q1), els = ci.at(q0);
+            if (gr.is_final_state(q)) {
+                // Cancel weight of q
+                thn += q_w;
+                els += q_w;
+            }
+            if (gr.is_final_state(q1))
+                thn += q1_w;
+            if (gr.is_final_state(q0))
+                els += q0_w;
+            cmux(co.at(q), input.at(j), thn, els);
+        }
+        {
+            using std::swap;
+            swap(ci, co);
+        }
+    }
+    // Cancel initial state when it's a final state
+    Graph::State qi = gr.initial_state();
+    auto ret = ci.at(qi);
+    if (gr.is_final_state(qi))
+        ret += trlwe_lvl1<P>::trivial_encrypt_poly_torus(
+            uint2weight<P>(gr.marker_of_state(qi)));
+    return ret;
+}
+
+void det_wfa()
+{
+    using P = params::CGGI19;
+    unsigned int seed = std::random_device{}();
+    std::default_random_engine prng{seed};
+
+    auto skey = secret_key<P>{prng};
+    auto bkey = bootstrapping_key<P>::make_ptr(prng, skey);
+    auto kskey = key_switching_key<P>::make_ptr(prng, skey);
+
+    // "bab"
+    std::vector<bool> plain_input = {false, true,  false, false, false, true,
+                                     true,  false, true,  false, false, false,
+                                     false, true,  true,  false, false, true,
+                                     false, false, false, true,  true,  false};
+    std::vector<trgsw_lvl1_fft<P>> input;
+    for (bool b : plain_input)
+        input.emplace_back(trgsw_lvl1<P>::encrypt_bool(prng, skey, b));
+
+    Graph gr;
+    trlwe_lvl1<P> enc_res = eval_det_wfa(gr, input);
+    trlwe_lvl1<P>::poly_torus res = enc_res.decrypt_poly_torus(skey);
+    std::cout << weight2uint<P>(res) << std::endl;
+}
+//////////////////////////
+
 //////////////////////////////
 //// MAIN
 //////////////////////////////
@@ -982,6 +1234,9 @@ int main()
 {
     using namespace std::chrono;
 
+    det_wfa();
+
+    /*
     // Test
     auto elapsed = timeit([] { test(1, 1); });
     debug_log("Test passed. (", duration_cast<milliseconds>(elapsed).count(),
@@ -990,6 +1245,7 @@ int main()
     // Bench
     auto ms_per_gate = bench_hom_nand();
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
+    */
 
     return 0;
 }
