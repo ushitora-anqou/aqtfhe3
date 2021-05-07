@@ -3,9 +3,9 @@ CXXFLAGS_DEBUG=$(CXXFLAGS) -g3 -O0
 CXXFLAGS_SANITIZE=$(CXXFLAGS) -O0 -g3 \
 				  -fsanitize=address,undefined -fno-omit-frame-pointer \
 				  -fno-optimize-sibling-calls
-CXXFLAGS_RELEASE=$(CXXFLAGS) -Ofast -march=native -DNDEBUG #-g3
+CXXFLAGS_RELEASE=$(CXXFLAGS) -Ofast -march=native -DNDEBUG -g3
 INC=
-LIB=
+LIB=-ltbb
 SOURCE=main.cpp
 HEADER=params.hpp spxlios.hpp
 
