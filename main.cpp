@@ -51,9 +51,14 @@ public:
     using State = int;
 
 private:
+    // When on state `index`,
+    //   input 0 -> next state is `child0`,
+    //              next weight is (w_{org} * X^k + gain0)
+    //   input 1 -> next state is `child1`
+    //              next weight is (w_{org} * X^k + gain1)
     struct TableItem {
         State index, child0, child1;
-        uint64_t marker;
+        uint64_t gain0, gain1;
     };
     std::vector<TableItem> table_;
     std::vector<std::vector<State>> states_at_depth_;
@@ -82,17 +87,10 @@ public:
         return 0;
     }
 
-    uint64_t marker_of_state(State state) const
+    uint64_t gain(State from, bool input) const
     {
-        return table_.at(state).marker;
-    }
-
-    std::set<uint64_t> markers() const
-    {
-        std::set<uint64_t> ret;
-        for (auto &&t : table_)
-            ret.insert(t.marker);
-        return ret;
+        auto &s = table_.at(from);
+        return input ? s.gain1 : s.gain0;
     }
 
     void reserve_states_at_depth(size_t depth)
@@ -131,54 +129,81 @@ trlwe_lvl1<P> trlwe_lvl1_zero()
 }
 
 template <class P>
-trlwe_lvl1<P> eval_det_wfa(const Graph &gr,
-                           const std::vector<trgsw_lvl1_fft<P>> &input)
-{
-    auto get_w = [&gr](Graph::State s) {
-        auto m = gr.marker_of_state(s);
-        auto w_s = trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(m));
-        return w_s;
-    };
-    auto mult_X_1 = [](const trlwe_lvl1<P> &src) {
-        trlwe_lvl1<P> out;
-        poly_mult_by_X_k(out.a, src.a, 1);
-        poly_mult_by_X_k(out.b, src.b, 1);
-        return out;
-    };
+class DetWFARunner {
+private:
+    Graph graph_;
+    std::vector<trgsw_lvl1_fft<P>> input_;
+    std::vector<trlwe_lvl1<P>> weight_;
+    bool hasEvaluated_;
+    int shiftWidth_, shiftInterval_;
 
-    size_t total_cnt_cmux = 0;
-    std::vector<trlwe_lvl1<P>> ci(gr.size(), trlwe_lvl1_zero<P>()),
-        co(gr.size());
-    int d = input.size();
-    for (int j = d - 1; j >= 0; --j) {
-        auto states = gr.states_at_depth(j);
-        std::for_each(std::execution::par, states.begin(), states.end(),
-                      [&](auto &&q) {
-                          Graph::State q1 = gr.next_state(q, true),
-                                       q0 = gr.next_state(q, false);
-                          auto thn = mult_X_1(ci.at(q1));
-                          thn += get_w(q1);
-                          auto els = mult_X_1(ci.at(q0));
-                          els += get_w(q0);
-                          cmux(co.at(q), input.at(j), thn, els);
-                      });
-        {
-            using std::swap;
-            swap(ci, co);
-        }
-        std::cerr << "[" << j << "] #CMUX : " << states.size() << "\n";
-        total_cnt_cmux += states.size();
+public:
+    DetWFARunner(Graph graph, std::vector<trgsw_lvl1_fft<P>> input)
+        : graph_(std::move(graph)),
+          input_(std::move(input)),
+          weight_(graph_.size(), trlwe_lvl1_zero<P>()),
+          hasEvaluated_(false),
+          shiftWidth_(1),
+          shiftInterval_(8)
+    {
     }
-    std::cerr << "Total #CMUX : " << total_cnt_cmux << "\n";
 
-    /*
-    // Cancel initial state when it's a final state
-    Graph::State qi = gr.initial_state();
-    auto ret = ci.at(qi);
-    ret += get_w(qi);
-    */
-    return ci.at(gr.initial_state());
-}
+    const trlwe_lvl1<P> &result() const
+    {
+        assert(hasEvaluated_);
+        return weight_.at(graph_.initial_state());
+    }
+
+    void eval()
+    {
+        assert(!hasEvaluated_);
+        hasEvaluated_ = true;
+
+        size_t total_cnt_cmux = 0;
+        std::vector<trlwe_lvl1<P>> out(graph_.size());
+        for (int j = input_.size() - 1; j >= 0; --j) {
+            auto states = graph_.states_at_depth(j);
+            std::for_each(std::execution::par, states.begin(), states.end(),
+                          [&](auto &&q) {
+                              trlwe_lvl1<P> w0, w1;
+                              next_weight(w1, j, q, true);
+                              next_weight(w0, j, q, false);
+                              cmux(out.at(q), input_.at(j), w1, w0);
+                          });
+            {
+                using std::swap;
+                swap(out, weight_);
+            }
+            std::cerr << "[" << j << "] #CMUX : " << states.size() << "\n";
+            total_cnt_cmux += states.size();
+        }
+        std::cerr << "Total #CMUX : " << total_cnt_cmux << "\n";
+    }
+
+private:
+    void mult_X_k(trlwe_lvl1<P> &out, const trlwe_lvl1<P> &src, size_t k) const
+    {
+        poly_mult_by_X_k(out.a, src.a, k);
+        poly_mult_by_X_k(out.b, src.b, k);
+    }
+
+    void next_weight(trlwe_lvl1<P> &out, int j, Graph::State from,
+                     bool input) const
+    {
+        Graph::State to = graph_.next_state(from, input);
+        uint64_t w = graph_.gain(from, input);
+
+        // Return Enc(
+        //   w_{to} * X^{shiftWidth} +
+        //   w_0 * X^0 +...+ w_{N-1} * X^{N-1}
+        // )
+        if (j % shiftInterval_ == shiftInterval_ - 1)
+            mult_X_k(out, weight_.at(to), shiftWidth_);
+        else
+            out = weight_.at(to);
+        out += trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(w));
+    }
+};
 
 void det_wfa()
 {
@@ -210,7 +235,12 @@ void det_wfa()
     std::cout << "Input size: " << input.size() << "\n"
               << "State size: " << gr.size() << "\n"
               << "=====\n";
-    trlwe_lvl1<P> enc_res = eval_det_wfa(gr, input);
+    // trlwe_lvl1<P> enc_res = eval_det_wfa(gr, input);
+
+    DetWFARunner<P> runner{gr, input};
+    runner.eval();
+    trlwe_lvl1<P> enc_res = runner.result();
+
     trlwe_lvl1<P>::poly_torus res = enc_res.decrypt_poly_torus(skey);
     std::cout << "Result (uint):\t" << weight2uint<P>(res) << "\n";
     std::cout << "Result (bitstr):\n" << weight2bitstring<P>(res) << "\n";
@@ -224,6 +254,7 @@ int main()
 {
     using namespace std::chrono;
 
+    /*
     // Test
     auto elapsed = timeit([] { test(1, 1); });
     debug_log("Test passed. (", duration_cast<milliseconds>(elapsed).count(),
@@ -232,6 +263,7 @@ int main()
     // Bench
     auto ms_per_gate = bench_hom_nand();
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
+    */
 
     det_wfa();
 

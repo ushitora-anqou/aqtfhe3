@@ -47,11 +47,12 @@ class BinaryACMachine
     table = @index2node.map do |n|
       c0 = n.find_next(0)
       c1 = n.find_next(1)
-      final = !n.matches.empty?
-      [n.index, c0.index, c1.index, final ? 1 : 0, n.matches]
+      g0 = if c0.matches.empty? then 0 else 1 end
+      g1 = if c1.matches.empty? then 0 else 1 end
+      [n.index, c0.index, c1.index, g0, g1, n.matches]
     end
-    table.each do |index, child0, child1, w, matches|
-      puts "{#{index}, #{child0}, #{child1}, #{w}},\t// #{matches.map { |m| @names[m[0]] }.join(", ")}"
+    table.each do |index, child0, child1, g0, g1, matches|
+      puts "{#{index}, #{child0}, #{child1}, #{g0}, #{g1}},\t// #{matches.map { |m| @names[m[0]] }.join(", ")}"
     end
   end
 
