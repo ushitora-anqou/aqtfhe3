@@ -15,7 +15,10 @@ typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
     typename trlwe_lvl1<P>::poly_torus w;
     const torus mu = 1u << 31;  // 1/2
     for (size_t i = 0; i < P::N; i++)
-        w[i] = ((n >> i) & 1u) ? mu : 0;
+        if (i < 64)
+            w[i] = ((n >> i) & 1u) ? mu : 0;
+        else
+            w[i] = 0;
     return w;
 }
 
@@ -219,11 +222,13 @@ private:
         //   w_{to} * X^{shift_width} +
         //   w_0 * X^0 +...+ w_{N-1} * X^{N-1}
         // )
-        if (j % shift_interval_ == shift_interval_ - 1)
+        if (j % shift_interval_ == shift_interval_ - 1) {
             mult_X_k(out, weight_.at(to), shift_width_);
-        else
+            out += trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(w));
+        }
+        else {
             out = weight_.at(to);
-        out += trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(w));
+        }
     }
 };
 
