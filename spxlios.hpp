@@ -2,9 +2,8 @@
     spxlios.hpp is strongly inspired by spqlios processor in library
     TFHE (https://tfhe.github.io/tfhe/). See LICENSE file for its license.
 */
-#pragma once
-#ifndef SPXLIOS_HPP
-#define SPXLIOS_HPP
+#ifndef AQTFHE3_SPXLIOS_HPP
+#define AQTFHE3_SPXLIOS_HPP
 
 #include <array>
 #include <cmath>
@@ -459,7 +458,7 @@ struct ifft_code : Xbyak::CodeGenerator {
     }
 };
 
-double accurate_cos(int32_t i, int32_t n)  // cos(2pi*i/n)
+inline double accurate_cos(int32_t i, int32_t n)  // cos(2pi*i/n)
 {
     constexpr double pi = std::numbers::pi;
     i = ((i % n) + n) % n;
@@ -472,7 +471,7 @@ double accurate_cos(int32_t i, int32_t n)  // cos(2pi*i/n)
     return std::cos(2. * pi * (i) / static_cast<double>(n));
 }
 
-double accurate_sin(int32_t i, int32_t n)  // sin(2pi*i/n)
+inline double accurate_sin(int32_t i, int32_t n)  // sin(2pi*i/n)
 {
     constexpr double pi = std::numbers::pi;
     i = ((i % n) + n) % n;
