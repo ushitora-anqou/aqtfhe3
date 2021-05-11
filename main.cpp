@@ -988,6 +988,7 @@ double bench_hom_nand()
 #include <execution>
 #include <queue>
 #include <set>
+#include <sstream>
 
 template <class P>
 typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
@@ -997,6 +998,24 @@ typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
     for (size_t i = 0; i < P::N; i++)
         w[i] = ((n >> i) & 1u) ? mu : 0;
     return w;
+}
+
+template <class P>
+std::string weight2bitstring(const typename trlwe_lvl1<P>::poly_torus &weight)
+{
+    const torus mu25 = 1u << 30, mu75 = (1u << 30) + (1u << 31);
+    std::stringstream ss;
+    for (size_t i = 0; i < P::N; i++) {
+        if (i % 32 == 0)
+            ss << "\n";
+        else if (i % 8 == 0)
+            ss << " ";
+        if (mu25 <= weight[i] && weight[i] <= mu75)
+            ss << 1;
+        else
+            ss << 0;
+    }
+    return ss.str();
 }
 
 template <class P>
@@ -1025,7 +1044,7 @@ public:
     Graph()
     {
         table_ = {
-#include "rand_automaton.inc"
+#include "test_table.inc"
         };
     }
 
@@ -1097,17 +1116,16 @@ template <class P>
 trlwe_lvl1<P> eval_det_wfa(const Graph &gr,
                            const std::vector<trgsw_lvl1_fft<P>> &input)
 {
-    std::unordered_map<uint64_t, trlwe_lvl1<P>> w;
-    auto find_w = [&w, &gr](Graph::State s) {
+    auto get_w = [&gr](Graph::State s) {
         auto m = gr.marker_of_state(s);
-        /*
-        auto it = w.find(m);
-        if (it != w.end())
-            return it->second;
-            */
         auto w_s = trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(m));
-        // w.emplace(m, w_s);
         return w_s;
+    };
+    auto mult_X_1 = [](const trlwe_lvl1<P> &src) {
+        trlwe_lvl1<P> out;
+        poly_mult_by_X_k(out.a, src.a, 1);
+        poly_mult_by_X_k(out.b, src.b, 1);
+        return out;
     };
 
     size_t total_cnt_cmux = 0;
@@ -1120,12 +1138,10 @@ trlwe_lvl1<P> eval_det_wfa(const Graph &gr,
                       [&](auto &&q) {
                           Graph::State q1 = gr.next_state(q, true),
                                        q0 = gr.next_state(q, false);
-                          auto thn = ci.at(q1);
-                          thn += find_w(q);  // Cancel weight of q
-                          thn += find_w(q1);
-                          auto els = ci.at(q0);
-                          els += find_w(q);  // Cancel weight of q
-                          els += find_w(q0);
+                          auto thn = mult_X_1(ci.at(q1));
+                          thn += get_w(q1);
+                          auto els = mult_X_1(ci.at(q0));
+                          els += get_w(q0);
                           cmux(co.at(q), input.at(j), thn, els);
                       });
         {
@@ -1137,11 +1153,13 @@ trlwe_lvl1<P> eval_det_wfa(const Graph &gr,
     }
     std::cerr << "Total #CMUX : " << total_cnt_cmux << "\n";
 
+    /*
     // Cancel initial state when it's a final state
     Graph::State qi = gr.initial_state();
     auto ret = ci.at(qi);
-    ret += find_w(qi);
-    return ret;
+    ret += get_w(qi);
+    */
+    return ci.at(gr.initial_state());
 }
 
 void det_wfa()
@@ -1154,9 +1172,14 @@ void det_wfa()
     // auto bkey = bootstrapping_key<P>::make_ptr(prng, skey);
     // auto kskey = key_switching_key<P>::make_ptr(prng, skey);
 
-    // "bab"
+    // "zabcde"
     std::vector<bool> plain_input = {
-#include "rand_input_valid.inc"
+        false, true,  false, true,  true,  true,  true,  false, true,  false,
+        false, false, false, true,  true,  false, false, true,  false, false,
+        false, true,  true,  false, true,  true,  false, false, false, true,
+        true,  false, false, false, true,  false, false, true,  true,  false,
+        true,  false, true,  false, false, true,  true,  false
+        //#include "rand_input_valid.inc"
         //#include "rand_input_invalid.inc"
     };
     std::vector<trgsw_lvl1_fft<P>> input;
@@ -1171,7 +1194,8 @@ void det_wfa()
               << "=====\n";
     trlwe_lvl1<P> enc_res = eval_det_wfa(gr, input);
     trlwe_lvl1<P>::poly_torus res = enc_res.decrypt_poly_torus(skey);
-    std::cout << "Result: " << weight2uint<P>(res) << "\n";
+    std::cout << "Result (uint):\t" << weight2uint<P>(res) << "\n";
+    std::cout << "Result (bitstr):\n" << weight2bitstring<P>(res) << "\n";
 }
 //////////////////////////
 
