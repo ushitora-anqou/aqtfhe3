@@ -4,6 +4,7 @@
 #include "test.hpp"
 
 #include <execution>
+#include <fstream>
 #include <queue>
 #include <set>
 #include <sstream>
@@ -66,9 +67,30 @@ private:
 public:
     Graph()
     {
-        table_ = {
-#include "test_table.inc"
-        };
+    }
+
+    Graph(const std::string &filename)
+    {
+        std::ifstream ifs{filename};
+        assert(ifs);
+        int N;
+        ifs >> N;
+        std::set<int> finalState;
+        for (int i = 0; i < N; i++) {
+            std::string no;
+            int s0, s1;
+            ifs >> no;
+            ifs >> s0 >> s1;
+            if (no.at(no.size() - 1) == '*')
+                finalState.insert(i);
+            table_.push_back(TableItem{i, s0, s1, 0, 0});
+        }
+        for (auto &&item : table_) {
+            if (finalState.contains(item.child0))
+                item.gain0 = 1;
+            if (finalState.contains(item.child1))
+                item.gain1 = 1;
+        }
     }
 
     size_t size() const
@@ -134,30 +156,30 @@ private:
     Graph graph_;
     std::vector<trgsw_lvl1_fft<P>> input_;
     std::vector<trlwe_lvl1<P>> weight_;
-    bool hasEvaluated_;
-    int shiftWidth_, shiftInterval_;
+    bool has_evaluated_;
+    int shift_width_, shift_interval_;
 
 public:
     DetWFARunner(Graph graph, std::vector<trgsw_lvl1_fft<P>> input)
         : graph_(std::move(graph)),
           input_(std::move(input)),
           weight_(graph_.size(), trlwe_lvl1_zero<P>()),
-          hasEvaluated_(false),
-          shiftWidth_(1),
-          shiftInterval_(8)
+          has_evaluated_(false),
+          shift_width_(1),
+          shift_interval_(8)
     {
     }
 
     const trlwe_lvl1<P> &result() const
     {
-        assert(hasEvaluated_);
+        assert(has_evaluated_);
         return weight_.at(graph_.initial_state());
     }
 
     void eval()
     {
-        assert(!hasEvaluated_);
-        hasEvaluated_ = true;
+        assert(!has_evaluated_);
+        has_evaluated_ = true;
 
         size_t total_cnt_cmux = 0;
         std::vector<trlwe_lvl1<P>> out(graph_.size());
@@ -194,18 +216,18 @@ private:
         uint64_t w = graph_.gain(from, input);
 
         // Return Enc(
-        //   w_{to} * X^{shiftWidth} +
+        //   w_{to} * X^{shift_width} +
         //   w_0 * X^0 +...+ w_{N-1} * X^{N-1}
         // )
-        if (j % shiftInterval_ == shiftInterval_ - 1)
-            mult_X_k(out, weight_.at(to), shiftWidth_);
+        if (j % shift_interval_ == shift_interval_ - 1)
+            mult_X_k(out, weight_.at(to), shift_width_);
         else
             out = weight_.at(to);
         out += trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(w));
     }
 };
 
-void det_wfa()
+void det_wfa(const char *graph_filename, const char *input_filename)
 {
     using P = params::CGGI19;
     unsigned int seed = std::random_device{}();
@@ -215,21 +237,24 @@ void det_wfa()
     // auto bkey = bootstrapping_key<P>::make_ptr(prng, skey);
     // auto kskey = key_switching_key<P>::make_ptr(prng, skey);
 
-    // "zabcde"
-    std::vector<bool> plain_input = {
-        false, true,  false, true,  true,  true,  true,  false, true,  false,
-        false, false, false, true,  true,  false, false, true,  false, false,
-        false, true,  true,  false, true,  true,  false, false, false, true,
-        true,  false, false, false, true,  false, false, true,  true,  false,
-        true,  false, true,  false, false, true,  true,  false
-        //#include "rand_input_valid.inc"
-        //#include "rand_input_invalid.inc"
-    };
+    const std::vector<bool> plain_input = [&] {
+        std::ifstream ifs{input_filename};
+        assert(ifs);
+        std::vector<bool> ret;
+        while (ifs) {
+            int ch = ifs.get();
+            if (ch == EOF)
+                break;
+            for (int i = 0; i < 8; i++)
+                ret.push_back(((static_cast<uint8_t>(ch) >> i) & 1u) != 0);
+        }
+        return ret;
+    }();
     std::vector<trgsw_lvl1_fft<P>> input;
     for (bool b : plain_input)
         input.emplace_back(trgsw_lvl1<P>::encrypt_bool(prng, skey, b));
 
-    Graph gr;
+    Graph gr{graph_filename};
     gr.reserve_states_at_depth(input.size());
 
     std::cout << "Input size: " << input.size() << "\n"
@@ -250,9 +275,14 @@ void det_wfa()
 //////////////////////////////
 //// MAIN
 //////////////////////////////
-int main()
+int main(int argc, char **argv)
 {
     using namespace std::chrono;
+
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s AUTOMATON-SPEC-FILE INPUT-FILE", argv[0]);
+        return 1;
+    }
 
     /*
     // Test
@@ -265,7 +295,7 @@ int main()
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
     */
 
-    det_wfa();
+    det_wfa(argv[1], argv[2]);
 
     return 0;
 }

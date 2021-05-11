@@ -43,17 +43,25 @@ class BinaryACMachine
     attach_index
   end
 
-  def dump_det_wfa
-    table = @index2node.map do |n|
+  def dump_det_wfa(fh)
+    fh.puts @index2node.size
+    @index2node.each do |n|
       c0 = n.find_next(0)
       c1 = n.find_next(1)
-      g0 = if c0.matches.empty? then 0 else 1 end
-      g1 = if c1.matches.empty? then 0 else 1 end
-      [n.index, c0.index, c1.index, g0, g1, n.matches]
+      final = !n.matches.empty?
+      fh.puts "#{n.index}#{final ? "*" : ""}\t#{c0.index}\t#{c1.index}"
     end
-    table.each do |index, child0, child1, g0, g1, matches|
-      puts "{#{index}, #{child0}, #{child1}, #{g0}, #{g1}},\t// #{matches.map { |m| @names[m[0]] }.join(", ")}"
-    end
+
+    #table = @index2node.map do |n|
+    #  c0 = n.find_next(0)
+    #  c1 = n.find_next(1)
+    #  g0 = if c0.matches.empty? then 0 else 1 end
+    #  g1 = if c1.matches.empty? then 0 else 1 end
+    #  [n.index, c0.index, c1.index, g0, g1, n.matches]
+    #end
+    #table.each do |index, child0, child1, g0, g1, matches|
+    #  puts "{#{index}, #{child0}, #{child1}, #{g0}, #{g1}},\t// #{matches.map { |m| @names[m[0]] }.join(", ")}"
+    #end
   end
 
   private
@@ -104,7 +112,7 @@ end
 
 src = %w!ab bc bab d abcde!
 acm = BinaryACMachine.new src, src
-acm.dump_det_wfa
+acm.dump_det_wfa($stdout)
 
 #names = []
 #bins = []
