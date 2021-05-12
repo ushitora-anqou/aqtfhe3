@@ -23,19 +23,23 @@ typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
 }
 
 template <class P>
-std::string weight2bitstring(const typename trlwe_lvl1<P>::poly_torus &weight)
+std::string weight2bitstring(
+    const std::vector<typename trlwe_lvl1<P>::poly_torus> &weight)
 {
     const torus mu25 = 1u << 30, mu75 = (1u << 30) + (1u << 31);
     std::stringstream ss;
-    for (size_t i = 0; i < P::N; i++) {
-        if (i % 32 == 0)
-            ss << "\n";
-        else if (i % 8 == 0)
-            ss << " ";
-        if (mu25 <= weight[i] && weight[i] <= mu75)
-            ss << 1;
-        else
-            ss << 0;
+    for (auto &&w : weight) {
+        for (size_t i = 0; i < P::N; i++) {
+            if (i % 32 == 0)
+                ss << "\n";
+            else if (i % 8 == 0)
+                ss << " ";
+            if (mu25 <= w[i] && w[i] <= mu75)
+                ss << 1;
+            else
+                ss << 0;
+        }
+        ss << "\n";
     }
     return ss.str();
 }
@@ -158,6 +162,7 @@ class DetWFARunner {
 private:
     Graph graph_;
     std::vector<trgsw_lvl1_fft<P>> input_;
+    size_t weightNumScale_;
     std::vector<trlwe_lvl1<P>> weight_;
     bool has_evaluated_;
     int shift_width_, shift_interval_;
@@ -166,17 +171,27 @@ public:
     DetWFARunner(Graph graph, std::vector<trgsw_lvl1_fft<P>> input)
         : graph_(std::move(graph)),
           input_(std::move(input)),
-          weight_(graph_.size(), trlwe_lvl1_zero<P>()),
+          weightNumScale_(1 + input_.size() / P::N),
+          weight_(weightNumScale_ * graph_.size(), trlwe_lvl1_zero<P>()),
           has_evaluated_(false),
           shift_width_(1),
-          shift_interval_(8)
+          shift_interval_(1)
     {
+        std::cerr << "Parameter:\n"
+                  << "\tInput size:\t" << input_.size() << "\n"
+                  << "\tState size:\t" << graph_.size() << "\n"
+                  << "\tWeight Num Scale:\t" << weightNumScale_ << "\n"
+                  << "\tWeight size:\t" << weight_.size() << "\n"
+                  << "\tShift width:\t" << shift_width_ << "\n"
+                  << "\tShift interval:\t" << shift_interval_ << "\n"
+                  << "=====\n";
     }
 
-    const trlwe_lvl1<P> &result() const
+    std::vector<trlwe_lvl1<P>> result() const
     {
         assert(has_evaluated_);
-        return weight_.at(graph_.initial_state());
+        auto it = weight_.begin() + graph_.initial_state() * weightNumScale_;
+        return std::vector<trlwe_lvl1<P>>{it, it + weightNumScale_};
     }
 
     void eval()
@@ -185,15 +200,18 @@ public:
         has_evaluated_ = true;
 
         size_t total_cnt_cmux = 0;
-        std::vector<trlwe_lvl1<P>> out(graph_.size());
+        std::vector<trlwe_lvl1<P>> out(weight_.size());
         for (int j = input_.size() - 1; j >= 0; --j) {
             auto states = graph_.states_at_depth(j);
             std::for_each(std::execution::par, states.begin(), states.end(),
                           [&](auto &&q) {
-                              trlwe_lvl1<P> w0, w1;
-                              next_weight(w1, j, q, true);
-                              next_weight(w0, j, q, false);
-                              cmux(out.at(q), input_.at(j), w1, w0);
+                              for (size_t i = 0; i < weightNumScale_; i++) {
+                                  trlwe_lvl1<P> w0, w1;
+                                  next_weight(w1, i, j, q, true);
+                                  next_weight(w0, i, j, q, false);
+                                  cmux(out.at(q * weightNumScale_ + i),
+                                       input_.at(j), w1, w0);
+                              }
                           });
             {
                 using std::swap;
@@ -212,22 +230,18 @@ private:
         poly_mult_by_X_k(out.b, src.b, k);
     }
 
-    void next_weight(trlwe_lvl1<P> &out, int j, Graph::State from,
+    void next_weight(trlwe_lvl1<P> &out, size_t i, int j, Graph::State from,
                      bool input) const
     {
         Graph::State to = graph_.next_state(from, input);
         uint64_t w = graph_.gain(from, input);
 
-        // Return Enc(
-        //   w_{to} * X^{shift_width} +
-        //   w_0 * X^0 +...+ w_{N-1} * X^{N-1}
-        // )
-        if (j % shift_interval_ == shift_interval_ - 1) {
-            mult_X_k(out, weight_.at(to), shift_width_);
+        if (j % shift_interval_ == shift_interval_ - 1 && i == j / P::N) {
+            mult_X_k(out, weight_.at(to * weightNumScale_ + i), shift_width_);
             out += trlwe_lvl1<P>::trivial_encrypt_poly_torus(uint2weight<P>(w));
         }
         else {
-            out = weight_.at(to);
+            out = weight_.at(to * weightNumScale_ + i);
         }
     }
 };
@@ -262,17 +276,14 @@ void det_wfa(const char *graph_filename, const char *input_filename)
     Graph gr{graph_filename};
     gr.reserve_states_at_depth(input.size());
 
-    std::cout << "Input size: " << input.size() << "\n"
-              << "State size: " << gr.size() << "\n"
-              << "=====\n";
-    // trlwe_lvl1<P> enc_res = eval_det_wfa(gr, input);
-
     DetWFARunner<P> runner{gr, input};
     runner.eval();
-    trlwe_lvl1<P> enc_res = runner.result();
+    std::vector<trlwe_lvl1<P>> enc_res = runner.result();
 
-    trlwe_lvl1<P>::poly_torus res = enc_res.decrypt_poly_torus(skey);
-    std::cout << "Result (uint):\t" << weight2uint<P>(res) << "\n";
+    std::vector<trlwe_lvl1<P>::poly_torus> res;
+    for (auto &&t : enc_res)
+        res.push_back(t.decrypt_poly_torus(skey));
+    // std::cout << "Result (uint):\t" << weight2uint<P>(res) << "\n";
     std::cout << "Result (bitstr):\n" << weight2bitstring<P>(res) << "\n";
 }
 //////////////////////////
