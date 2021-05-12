@@ -8,6 +8,7 @@
 #include <queue>
 #include <set>
 #include <sstream>
+#include <thread>
 
 template <class P>
 typename trlwe_lvl1<P>::poly_torus uint2weight(uint64_t n)
@@ -182,9 +183,11 @@ public:
                   << "\tState size:\t" << graph_.size() << "\n"
                   << "\tWeight Num Scale:\t" << weightNumScale_ << "\n"
                   << "\tWeight size:\t" << weight_.size() << "\n"
-                  << "\tShift width:\t" << shift_width_ << "\n"
-                  << "\tShift interval:\t" << shift_interval_ << "\n"
+                  << "\tConcurrency:\t" << std::thread::hardware_concurrency()
+                  << "\n"
                   << "=====\n";
+        //<< "\tShift width:\t" << shift_width_ << "\n"
+        //<< "\tShift interval:\t" << shift_interval_ << "\n"
     }
 
     std::vector<trlwe_lvl1<P>> result() const
