@@ -18,26 +18,22 @@ $ make
 
 ### Run
 
-```sh
-$ build/main test/01.spec test/01.in
+In the `build/` directory:
 
+```sh
+$ time ./main ../test/01.spec ../test/01.in
 Parameter:
 	Input size:	264
 	State size:	19561
 	Weight Num Scale:	1
 	Weight size:	19561
-	Shift width:	1
-	Shift interval:	1
+	Concurrency:	12
 =====
 [263] #CMUX : 19537
 [262] #CMUX : 19543
 [261] #CMUX : 19537
 [260] #CMUX : 19543
 [259] #CMUX : 19537
-[258] #CMUX : 19543
-[257] #CMUX : 19537
-[256] #CMUX : 19543
-[255] #CMUX : 19537
 
 ...
 
@@ -84,6 +80,14 @@ Result (bitstr):
 00000000 00000000 00000000 00000000
 00000000 00000000 00000000 00000000
 00000000 00000000 00000000 00000000
+
+./main ../test/01.spec ../test/01.in  160.97s user 0.59s system 1054% cpu 15.317 total
+```
+
+The result means:
+```
+quick fox jumps over the lazy dog
+000010000000010000010001001000011
 ```
 
 ## 章立てに対応するコミット
