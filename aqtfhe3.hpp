@@ -110,9 +110,9 @@ void poly_mult(poly<uint32_t, N> &out, const poly<uint32_t, N> &lhs,
 
 inline torus double2torus(double src)
 {
-    return static_cast<torus>(
+    return static_cast<torus>(static_cast<int64_t>(
         std::fmod(src, 1.0) *
-        std::pow(2.0, std::numeric_limits<torus>::digits));
+        std::pow(2.0, std::numeric_limits<torus>::digits)));
 }
 
 template <RandGen RG>

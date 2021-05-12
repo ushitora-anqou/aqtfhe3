@@ -556,7 +556,7 @@ class processor {
     static_assert((N & (N - 1)) == 0, "N must be a power of 2");
 
 private:
-    std::shared_ptr<double[]> direct_trig_tables_, reverse_trig_tables_;
+    std::shared_ptr<double> direct_trig_tables_, reverse_trig_tables_;
     detail::FFT_PRECOMP tables_direct_, tables_reverse_;
     detail::fft_code fft_code_;
     detail::ifft_code ifft_code_;
@@ -568,8 +568,12 @@ private:
 
 public:
     processor()
-        : direct_trig_tables_(detail::direct_trig_tables<N>()),
-          reverse_trig_tables_(detail::reverse_trig_tables<N>())
+        : direct_trig_tables_(
+              detail::direct_trig_tables<N>(),
+              [](double *p) { operator delete[](p, std::align_val_t(32)); }),
+          reverse_trig_tables_(detail::reverse_trig_tables<N>(), [](double *p) {
+              operator delete[](p, std::align_val_t(32));
+          })
     {
         tables_direct_.n = 2 * N;
         tables_direct_.trig_tables = direct_trig_tables_.get();
