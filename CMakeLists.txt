@@ -8,7 +8,7 @@ project(aqtfhe3 LANGUAGES CXX)
 
 set(AQTFHE3_CXXFLAGS -Wall -Wextra -pedantic -Wno-sign-compare)
 set(AQTFHE3_CXXFLAGS_DEBUG   ${IYOKAN_CXXFLAGS} -O0 -g3)
-set(AQTFHE3_CXXFLAGS_RELEASE ${IYOKAN_CXXFLAGS} -Ofast -march=native -DNDEBUG -g3)
+set(AQTFHE3_CXXFLAGS_RELEASE ${IYOKAN_CXXFLAGS} -Ofast -march=native -g3)
 set(AQTFHE3_LIBS tbb)
 
 set(CMAKE_C_FLAGS "")
