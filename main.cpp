@@ -276,7 +276,7 @@ private:
 void det_wfa(const char *graph_filename, const char *input_filename)
 {
     using P = params::CGGI19;
-    unsigned int seed = std::random_device{}();
+    unsigned int seed = 0;  // std::random_device{}();
     std::default_random_engine prng{seed};
 
     auto skey = secret_key<P>{prng};
