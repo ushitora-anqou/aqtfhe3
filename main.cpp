@@ -168,16 +168,19 @@ private:
     std::vector<trlwe_lvl1<P>> weight_;
     bool has_evaluated_;
     int shift_width_, shift_interval_;
+    std::optional<secret_key<P>> secret_key_;
 
 public:
-    DetWFARunner(Graph graph, std::vector<trgsw_lvl1_fft<P>> input)
+    DetWFARunner(Graph graph, std::vector<trgsw_lvl1_fft<P>> input,
+                 std::optional<secret_key<P>> secret_key = std::nullopt)
         : graph_(std::move(graph)),
           input_(std::move(input)),
           weightNumScale_(1 + input_.size() / P::N),
           weight_(weightNumScale_ * graph_.size(), trlwe_lvl1_zero<P>()),
           has_evaluated_(false),
           shift_width_(1),
-          shift_interval_(1)
+          shift_interval_(1),
+          secret_key_(std::move(secret_key))
     {
         std::cerr << "Parameter:\n"
                   << "\tInput size:\t" << input_.size() << "\n"
@@ -204,23 +207,43 @@ public:
         has_evaluated_ = true;
 
         size_t total_cnt_cmux = 0;
-        std::vector<trlwe_lvl1<P>> out(weight_.size());
+        std::vector<trlwe_lvl1<P>> out(weight_.size(), trlwe_lvl1_zero<P>());
         for (int j = input_.size() - 1; j >= 0; --j) {
             auto states = graph_.states_at_depth(j);
-            std::for_each(std::execution::par, states.begin(), states.end(),
-                          [&](auto &&q) {
-                              for (size_t i = 0; i < weightNumScale_; i++) {
-                                  trlwe_lvl1<P> w0, w1;
-                                  next_weight(w1, i, j, q, true);
-                                  next_weight(w0, i, j, q, false);
-                                  cmux(out.at(q * weightNumScale_ + i),
-                                       input_.at(j), w1, w0);
-                              }
-                          });
+            std::for_each(
+                std::execution::par, states.begin(), states.end(),
+                [&](auto &&q) {
+                    for (size_t i = 0; i < weightNumScale_; i++) {
+                        trlwe_lvl1<P> w0, w1;
+                        next_weight(w1, i, j, q, true);
+                        next_weight(w0, i, j, q, false);
+                        cmux(out.at(q * weightNumScale_ + i), input_.at(j), w1,
+                             w0);
+
+                        if (secret_key_) {
+                            auto dec_out = weight2bitstring<P>(
+                                {out.at(q * weightNumScale_ + i)
+                                     .decrypt_poly_torus(*secret_key_)});
+                            auto dec_in1 = weight2bitstring<P>(
+                                {w1.decrypt_poly_torus(*secret_key_)});
+                            auto dec_in0 = weight2bitstring<P>(
+                                {w0.decrypt_poly_torus(*secret_key_)});
+                            assert(dec_out == dec_in0 || dec_out == dec_in1);
+                        }
+                    }
+                });
             {
                 using std::swap;
                 swap(out, weight_);
             }
+            // dump
+            if (secret_key_) {
+                auto &w = weight_.at(0);
+                std::cerr << weight2bitstring<P>(
+                                 {w.decrypt_poly_torus(*secret_key_)})
+                          << std::endl;
+            }
+            //
             std::cerr << "[" << j << "] #CMUX : " << states.size() << "\n";
             total_cnt_cmux += states.size();
         }
@@ -280,7 +303,7 @@ void det_wfa(const char *graph_filename, const char *input_filename)
     Graph gr{graph_filename};
     gr.reserve_states_at_depth(input.size());
 
-    DetWFARunner<P> runner{gr, input};
+    DetWFARunner<P> runner{gr, input, skey};
     runner.eval();
     std::vector<trlwe_lvl1<P>> enc_res = runner.result();
 
