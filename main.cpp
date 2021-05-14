@@ -134,6 +134,7 @@ public:
         for (size_t i = 0; i < depth; i++) {
             states_at_depth_.emplace_back(sts0.begin(), sts0.end());
 
+            sts1.clear();
             for (State st : sts0) {
                 sts1.insert(next_state(st, false));
                 sts1.insert(next_state(st, true));
