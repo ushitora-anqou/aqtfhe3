@@ -538,9 +538,11 @@ void decompose(std::array<poly<torus, P::N>, P::l> &out,
     for (size_t i = 0; i < l; i++)
         offset += Bg / 2 * (1u << (32 - (i + 1) * Bgbit));
 
+    torus round_offset = 1ULL << (32 - l * Bgbit - 1);
+
     poly<torus, P::N> a_tilde;
     for (size_t i = 0; i < N; i++)
-        a_tilde[i] = a[i] + offset;
+        a_tilde[i] = a[i] + offset + round_offset;
 
     for (size_t i = 0; i < l; i++)
         for (size_t j = 0; j < N; j++)
