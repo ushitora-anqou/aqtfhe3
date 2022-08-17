@@ -20,7 +20,7 @@ template <class T, size_t Size>
 using poly = std::array<T, Size>;
 
 template <class... Args>
-void debug_log(Args &&... args)
+void debug_log(Args &&...args)
 {
     const char *envvar = std::getenv("AQTFHE3_VERBOSE");
     if (envvar != nullptr && std::strcmp(envvar, "1") == 0)
@@ -990,6 +990,37 @@ void hom_expand_step2(trgsw_lvl1<P> &out, const trgsw_lvl1_fft<P> &A,
     }
 }
 
+void test_external_product()
+{
+    // !!! CAVEAT !!!: std::default_random_engine is NOT
+    // cryptographically secure. DO NOT use it in production!
+    std::default_random_engine prng;
+    std::binomial_distribution<int> dist;
+
+    for (int i = 0; i < 1; i++) {
+        auto skey = secret_key<P>{prng};
+
+        const trgsw_lvl1_fft<P> A = [&] {
+            poly<int, P::N> mu = {};
+            mu[0] = 1;
+            return trgsw_lvl1<P>::encrypt_poly_int(prng, skey, mu);
+        }();
+
+        trlwe_lvl1<P> c = trlwe_lvl1<P>::encrypt_zero(prng, skey);
+        c.b[0] += 1u * (1u << (32 - P::Bgbit));
+
+        trlwe_lvl1<P> out;
+        external_product(out, A, c);
+
+        for (int i = 0; i < 10; i++)
+            std::cerr << i << "\t" << std::hex << c.decrypt_poly_torus(skey)[i]
+                      << "\n";
+        for (int i = 0; i < 10; i++)
+            std::cerr << i << "\t" << std::hex
+                      << out.decrypt_poly_torus(skey)[i] << "\n";
+    }
+}
+
 void test_hom_expand()
 {
     // !!! CAVEAT !!!: std::default_random_engine is NOT
@@ -1045,14 +1076,15 @@ int main()
 {
     using namespace std::chrono;
 
-    test_hom_expand();
+    // test_external_product();
+    //  test_hom_expand();
 
-    /*
     // Test
     auto elapsed = timeit([] { test(1, 1); });
     debug_log("Test passed. (", duration_cast<milliseconds>(elapsed).count(),
               " ms)");
 
+    /*
     // Bench
     auto ms_per_gate = bench_hom_nand();
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
