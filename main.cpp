@@ -116,6 +116,26 @@ void poly_mult(poly<uint32_t, N> &out, const poly<uint32_t, N> &lhs,
     fftproc<N>.twist_fft_lvl1(out, tmp);
 }
 
+/*
+// Calculate out = (lhs * rhs) mod (X^N + 1),
+// where length(lhs) = length(rhs) = N
+template <class T, class T1, class T2, size_t N>
+void poly_mult(poly<T, N> &out, const poly<T1, N> &lhs,
+               const poly<T2, N> &rhs) noexcept
+{
+    // Initialize with 0
+    for (T &v : out)
+        v = 0;
+
+    for (size_t i = 0; i < N; i++)
+        for (size_t j = 0; j < N; j++)
+            if (i + j < N)
+                out[i + j] += lhs[i] * rhs[j];
+            else
+                out[i + j - N] -= lhs[i] * rhs[j];
+}
+*/
+
 torus double2torus(double src)
 {
     return static_cast<torus>(
@@ -1077,14 +1097,14 @@ int main()
     using namespace std::chrono;
 
     // test_external_product();
-    //  test_hom_expand();
+    test_hom_expand();
 
+    /*
     // Test
-    auto elapsed = timeit([] { test(1, 1); });
+    auto elapsed = timeit([] { test(2, 100); });
     debug_log("Test passed. (", duration_cast<milliseconds>(elapsed).count(),
               " ms)");
 
-    /*
     // Bench
     auto ms_per_gate = bench_hom_nand();
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
