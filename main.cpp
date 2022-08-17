@@ -978,12 +978,76 @@ double bench_hom_nand()
 }
 
 //////////////////////////////
+//// HOM EXPAND
+//////////////////////////////
+using P = typename params::CGGI19;
+void hom_expand_step2(trgsw_lvl1<P> &out, const trgsw_lvl1_fft<P> &A,
+                      const std::array<trlwe_lvl1<P>, P::l> &c)
+{
+    for (size_t k = 0; k < P::l; k++) {
+        external_product(out[k], A, c[k]);
+        out[k + P::l] = c[k];
+    }
+}
+
+void test_hom_expand()
+{
+    // !!! CAVEAT !!!: std::default_random_engine is NOT
+    // cryptographically secure. DO NOT use it in production!
+    std::default_random_engine prng;
+    std::binomial_distribution<int> dist;
+
+    for (int i = 0; i < 100; i++) {
+        auto skey = secret_key<P>{prng};
+        bool ans = dist(prng);
+
+        std::cerr << "." << (ans ? 1 : 0);
+
+        const trgsw_lvl1<P> A = [&] {
+            poly<int, P::N> mu;
+            for (size_t i = 0; i < P::N; i++) {
+                mu[i] = -static_cast<int>(skey.lvl1[i]);
+            }
+            return trgsw_lvl1<P>::encrypt_poly_int(prng, skey, mu);
+        }();
+
+        const std::array<trlwe_lvl1<P>, P::l> c = [&] {
+            torus b = ans ? 1 : 0;
+            std::array<trlwe_lvl1<P>, P::l> c;
+            for (size_t k = 0; k < P::l; k++) {
+                c[k] = trlwe_lvl1<P>::encrypt_zero(prng, skey);
+                c[k].b[0] += b * (1u << (32 - (k + 1) * P::Bgbit));
+            }
+            return c;
+        }();
+
+        trgsw_lvl1<P> out;
+        hom_expand_step2(out, A, c);
+        trgsw_lvl1_fft<P> out_fft{out};
+
+        // Decryption of TRGSW is not implemented. Instead, we use CMux to check
+        // if the result is correct.
+        trlwe_lvl1<P> c0 = trlwe_lvl1<P>::encrypt_poly_bool(prng, skey, {});
+        trlwe_lvl1<P> c1 = trlwe_lvl1<P>::encrypt_poly_bool(prng, skey, {true});
+        trlwe_lvl1<P> res;
+        cmux(res, out_fft, c1, c0);
+        bool res_bool = res.decrypt_poly_bool(skey)[0];
+        std::cerr << res_bool;
+        TEST_ASSERT(res_bool == ans);
+    }
+    std::cerr << "\n";
+}
+
+//////////////////////////////
 //// MAIN
 //////////////////////////////
 int main()
 {
     using namespace std::chrono;
 
+    test_hom_expand();
+
+    /*
     // Test
     auto elapsed = timeit([] { test(1, 1); });
     debug_log("Test passed. (", duration_cast<milliseconds>(elapsed).count(),
@@ -992,6 +1056,7 @@ int main()
     // Bench
     auto ms_per_gate = bench_hom_nand();
     debug_log("Benchmark result: ", ms_per_gate, " ms/gate");
+    */
 
     return 0;
 }
